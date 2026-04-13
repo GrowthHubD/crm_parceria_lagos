@@ -1,6 +1,7 @@
 node_modules/
 .env
 .env.*
+env
 __pycache__/
 *.pyc
 *.pyo
@@ -9,3 +10,8 @@ Thumbs.db
 *.log
 dist/
 .cache/
+.next/
+seed-output.txt
+seed-error.txt
+next-env.d.ts
+cols.txt

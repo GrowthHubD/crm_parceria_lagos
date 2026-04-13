@@ -1,0 +1,93 @@
+import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
+import { checkPermission } from "@/lib/permissions";
+import { db } from "@/lib/db";
+import { pipeline, pipelineStage, lead, leadTag, leadTagAssignment } from "@/lib/db/schema/pipeline";
+import { user } from "@/lib/db/schema/users";
+import { eq, asc, desc, and } from "drizzle-orm";
+import { getTenantContext } from "@/lib/tenant";
+import type { UserRole } from "@/types";
+
+export async function GET(request: NextRequest) {
+  try {
+    const ctx = await getTenantContext(request.headers);
+    const canView = await checkPermission(ctx.userId, ctx.role as UserRole, "pipeline", "view", ctx);
+    if (!canView) {
+      return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
+    }
+
+    // Filtrar por pipelineId se fornecido, senão usar o default do tenant
+    let pipelineId = request.nextUrl.searchParams.get("pipelineId");
+    if (!pipelineId) {
+      const [defaultPipeline] = await db
+        .select({ id: pipeline.id })
+        .from(pipeline)
+        .where(and(eq(pipeline.tenantId, ctx.tenantId), eq(pipeline.isDefault, true)))
+        .limit(1);
+      pipelineId = defaultPipeline?.id ?? null;
+    }
+
+    // Buscar funis do tenant para o seletor
+    const funnels = await db
+      .select({ id: pipeline.id, name: pipeline.name, isDefault: pipeline.isDefault })
+      .from(pipeline)
+      .where(eq(pipeline.tenantId, ctx.tenantId))
+      .orderBy(asc(pipeline.createdAt));
+
+    const stageFilter = pipelineId
+      ? and(eq(pipelineStage.tenantId, ctx.tenantId), eq(pipelineStage.pipelineId, pipelineId))
+      : eq(pipelineStage.tenantId, ctx.tenantId);
+
+    const [stages, leads, tags, allUsers] = await Promise.all([
+      db.select().from(pipelineStage).where(stageFilter).orderBy(asc(pipelineStage.order)),
+      db
+        .select({
+          id: lead.id,
+          name: lead.name,
+          companyName: lead.companyName,
+          email: lead.email,
+          phone: lead.phone,
+          stageId: lead.stageId,
+          source: lead.source,
+          estimatedValue: lead.estimatedValue,
+          notes: lead.notes,
+          assignedTo: lead.assignedTo,
+          createdAt: lead.createdAt,
+          updatedAt: lead.updatedAt,
+          assigneeName: user.name,
+        })
+        .from(lead)
+        .leftJoin(user, eq(lead.assignedTo, user.id))
+        .orderBy(desc(lead.createdAt)),
+      db
+        .select({
+          leadId: leadTagAssignment.leadId,
+          tagId: leadTagAssignment.tagId,
+          tagName: leadTag.name,
+          tagColor: leadTag.color,
+        })
+        .from(leadTagAssignment)
+        .innerJoin(leadTag, eq(leadTagAssignment.tagId, leadTag.id)),
+      db.select({ id: user.id, name: user.name }).from(user).where(eq(user.isActive, true)),
+    ]);
+
+    // Attach tags to leads
+    const leadsWithTags = leads.map((l) => ({
+      ...l,
+      tags: tags
+        .filter((t) => t.leadId === l.id)
+        .map((t) => ({ id: t.tagId, name: t.tagName, color: t.tagColor })),
+    }));
+
+    return NextResponse.json({
+      stages,
+      leads: leadsWithTags,
+      users: allUsers,
+      funnels,
+      activePipelineId: pipelineId,
+    });
+  } catch (error) {
+    console.error("[PIPELINE] GET failed:", { operation: "list" });
+    return NextResponse.json({ error: "Erro interno" }, { status: 500 });
+  }
+}

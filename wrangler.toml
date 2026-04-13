@@ -1,0 +1,8 @@
+name = "sistema-gh"
+pages_build_output_dir = ".vercel/output/static"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# NOTE: cron triggers are handled externally (cron-job.org) calling:
+#   GET /api/cron/kanban-daily   — daily at 08:00 UTC  (Authorization: Bearer CRON_SECRET)
+#   GET /api/cron/kanban-weekly  — Monday at 08:00 UTC (Authorization: Bearer CRON_SECRET)

@@ -1,0 +1,10 @@
+name = "sistemagh-cron"
+main = "worker.js"
+compatibility_date = "2024-12-01"
+
+[triggers]
+crons = ["0 8 * * *", "0 8 * * 1"]
+
+# Secrets (set via `wrangler secret put`):
+#   CRON_SECRET  — must match the value in the Pages project
+#   APP_URL      — e.g. https://sistemagh.pages.dev
