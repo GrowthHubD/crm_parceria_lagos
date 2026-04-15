@@ -36,7 +36,7 @@ interface DashboardClientProps {
   monthly: { income: number; expenses: number; profit: number; pending: number; overdue: number };
   yearly: { total: number; received: number; pending: number; year: number; yoyGrowth: number | null; momGrowth: number | null; vsLastYear: number | null };
   business: { ticketMedio: number; momGrowth: number | null; revenuePerHour: number; profitMargin: number; concentration: number; totalMrr: number; activeContracts: number };
-  funnelStages: { name: string; leads: number }[];
+  funnelStages: { id: string; name: string; leads: number }[];
   totalLeads: number;
   recentClients: { id: string; companyName: string; responsibleName: string; createdAt: string }[];
 }

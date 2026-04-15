@@ -1,43 +1,69 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { getTenantContext } from "@/lib/tenant";
-import { getUserModules } from "@/lib/permissions";
-import { DashboardShell } from "@/components/layout/dashboard-shell";
-import type { UserRole } from "@/types";
+"use client";
 
-export default async function DashboardLayout({
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useSession } from "@/lib/auth-client";
+import { DashboardShell } from "@/components/layout/dashboard-shell";
+import { Loader2 } from "lucide-react";
+import type { SystemModule, UserRole } from "@/types";
+
+interface TenantContext {
+  isPlatformOwner: boolean;
+  tenantSlug: string;
+  role: string;
+  modules: SystemModule[];
+  userName: string;
+  userImage: string | null;
+}
+
+export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  let tenantCtx;
-  try {
-    tenantCtx = await getTenantContext(await headers());
-  } catch {
-    redirect("/login");
+  const { data: session, isPending } = useSession();
+  const router = useRouter();
+  const [tenantCtx, setTenantCtx] = useState<TenantContext | null>(null);
+
+  useEffect(() => {
+    if (!isPending && !session) {
+      router.push("/login");
+    }
+  }, [session, isPending, router]);
+
+  useEffect(() => {
+    if (!session) return;
+
+    fetch("/api/tenant/context")
+      .then((res) => {
+        if (!res.ok) throw new Error("NO_TENANT");
+        return res.json();
+      })
+      .then(setTenantCtx)
+      .catch(() => router.push("/login"));
+  }, [session, router]);
+
+  if (isPending || !tenantCtx) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3 animate-fade-in">
+          <Loader2 className="w-8 h-8 text-primary animate-spin" />
+          <p className="text-muted text-small">Carregando...</p>
+        </div>
+      </div>
+    );
   }
 
-  const userRole = tenantCtx.role as UserRole;
-  const allowedModules = await getUserModules(
-    tenantCtx.userId,
-    userRole,
-    tenantCtx
-  );
-
-  // Buscar nome e imagem do user via auth
-  const { auth } = await import("@/lib/auth");
-  const session = await auth.api.getSession({ headers: await headers() });
-  const userName = session?.user?.name ?? "Usuário";
-  const userImage = session?.user?.image ?? null;
+  if (!session) return null;
 
   return (
     <DashboardShell
-      allowedModules={allowedModules}
+      allowedModules={tenantCtx.modules}
       isPlatformOwner={tenantCtx.isPlatformOwner}
       tenantSlug={tenantCtx.tenantSlug}
-      userName={userName}
-      userImage={userImage}
-      userRole={userRole}
+      userName={tenantCtx.userName}
+      userImage={tenantCtx.userImage}
+      userRole={tenantCtx.role as UserRole}
     >
       {children}
     </DashboardShell>

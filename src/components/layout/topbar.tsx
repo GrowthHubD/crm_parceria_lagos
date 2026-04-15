@@ -44,7 +44,7 @@ export function Topbar({ userName, userImage, onMenuClick }: TopbarProps) {
     }
 
     fetchUnread();
-    const interval = setInterval(fetchUnread, 30_000);
+    const interval = setInterval(fetchUnread, 60_000);
     return () => {
       mounted = false;
       clearInterval(interval);

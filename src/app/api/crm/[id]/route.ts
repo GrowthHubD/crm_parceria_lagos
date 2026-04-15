@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantContext } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage } from "@/lib/db/schema/crm";
-import { eq, asc, desc } from "drizzle-orm";
+import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
+import { eq, and, asc } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 const updateConversationSchema = z.object({
@@ -19,17 +20,15 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
-
-    const userRole = ((session.user as { role?: string }).role ?? "operational") as UserRole;
-    const canView = await checkPermission(session.user.id, userRole, "crm", "view");
+    const ctx = await getTenantContext(request.headers);
+    const canView = await checkPermission(ctx.userId, ctx.role as UserRole, "crm", "view", ctx);
     if (!canView) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
+    // Validar que a conversation pertence ao tenant do user
     const [conversation] = await db
       .select()
       .from(crmConversation)
-      .where(eq(crmConversation.id, id))
+      .where(and(eq(crmConversation.id, id), eq(crmConversation.tenantId, ctx.tenantId)))
       .limit(1);
 
     if (!conversation) return NextResponse.json({ error: "Conversa não encontrada" }, { status: 404 });
@@ -48,7 +47,32 @@ export async function GET(
         .where(eq(crmConversation.id, id));
     }
 
-    return NextResponse.json({ conversation: { ...conversation, unreadCount: 0 }, messages });
+    // Buscar lead vinculado (se existir)
+    const [linkedLead] = await db
+      .select({
+        id: lead.id,
+        name: lead.name,
+        companyName: lead.companyName,
+        stageName: pipelineStage.name,
+        stageColor: pipelineStage.color,
+        estimatedValue: lead.estimatedValue,
+        isConverted: lead.isConverted,
+      })
+      .from(lead)
+      .leftJoin(pipelineStage, eq(lead.stageId, pipelineStage.id))
+      .where(
+        and(
+          eq(lead.crmConversationId, id),
+          eq(lead.tenantId, ctx.tenantId)
+        )
+      )
+      .limit(1);
+
+    return NextResponse.json({
+      conversation: { ...conversation, unreadCount: 0 },
+      messages,
+      linkedLead: linkedLead ?? null,
+    });
   } catch {
     console.error("[CRM] GET conversation failed:", { operation: "get" });
     return NextResponse.json({ error: "Erro interno" }, { status: 500 });
@@ -61,11 +85,8 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
-
-    const userRole = ((session.user as { role?: string }).role ?? "operational") as UserRole;
-    const canEdit = await checkPermission(session.user.id, userRole, "crm", "edit");
+    const ctx = await getTenantContext(request.headers);
+    const canEdit = await checkPermission(ctx.userId, ctx.role as UserRole, "crm", "edit", ctx);
     if (!canEdit) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
     const body = await request.json();
@@ -83,7 +104,7 @@ export async function PATCH(
     const [updated] = await db
       .update(crmConversation)
       .set(updates)
-      .where(eq(crmConversation.id, id))
+      .where(and(eq(crmConversation.id, id), eq(crmConversation.tenantId, ctx.tenantId)))
       .returning();
 
     if (!updated) return NextResponse.json({ error: "Conversa não encontrada" }, { status: 404 });

@@ -5,7 +5,8 @@ import { checkPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
 import { client } from "@/lib/db/schema/clients";
-import { eq, and } from "drizzle-orm";
+import { automation, automationStep, automationLog } from "@/lib/db/schema/automations";
+import { eq, and, asc } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 const updateLeadSchema = z.object({
@@ -98,6 +99,51 @@ export async function PATCH(
         }
       } catch {
         // Auto-create is best-effort — don't fail the lead update
+      }
+
+      // Trigger automações do tipo "stage_enter"
+      try {
+        const automations = await db
+          .select()
+          .from(automation)
+          .where(
+            and(
+              eq(automation.tenantId, updated.tenantId),
+              eq(automation.triggerType, "stage_enter"),
+              eq(automation.isActive, true)
+            )
+          );
+
+        for (const auto of automations) {
+          const config = auto.triggerConfig as { stageId?: string } | null;
+          if (config?.stageId !== data.stageId) continue;
+
+          // Buscar steps da automação
+          const steps = await db
+            .select()
+            .from(automationStep)
+            .where(eq(automationStep.automationId, auto.id))
+            .orderBy(asc(automationStep.order));
+
+          // Agendar execução dos steps
+          let accumulatedDelay = 0;
+          for (const step of steps) {
+            if (step.type === "wait") {
+              accumulatedDelay += ((step.config as { delayMinutes?: number }).delayMinutes ?? 0);
+              continue;
+            }
+
+            await db.insert(automationLog).values({
+              automationId: auto.id,
+              leadId: id,
+              stepId: step.id,
+              status: "pending",
+              scheduledAt: new Date(Date.now() + accumulatedDelay * 60 * 1000),
+            });
+          }
+        }
+      } catch {
+        // Trigger is best-effort
       }
     }
 

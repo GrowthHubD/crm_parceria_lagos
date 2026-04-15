@@ -13,6 +13,7 @@ import * as sdr from "./schema/sdr";
 import * as blog from "./schema/blog";
 import * as notifications from "./schema/notifications";
 import * as settings from "./schema/settings";
+import * as automations from "./schema/automations";
 
 const schema = {
   ...tenants,
@@ -27,6 +28,7 @@ const schema = {
   ...blog,
   ...notifications,
   ...settings,
+  ...automations,
 };
 
 type DbInstance = ReturnType<typeof drizzle<typeof schema>>;

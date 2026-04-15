@@ -3,8 +3,9 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
-import { crmConversation, crmMessage, whatsappNumber } from "@/lib/db/schema/crm";
+import { crmConversation, crmMessage } from "@/lib/db/schema/crm";
 import { eq } from "drizzle-orm";
+import { getUazapiClientForConversation } from "@/lib/uazapi";
 import type { UserRole } from "@/types";
 
 const sendSchema = z.object({
@@ -30,51 +31,24 @@ export async function POST(
       return NextResponse.json({ error: "Dados inválidos", details: parsed.error.flatten() }, { status: 400 });
     }
 
-    const [conversation] = await db
-      .select({
-        id: crmConversation.id,
-        contactPhone: crmConversation.contactPhone,
-        whatsappNumberId: crmConversation.whatsappNumberId,
-        uazapiSession: whatsappNumber.uazapiSession,
-        uazapiToken: whatsappNumber.uazapiToken,
-      })
-      .from(crmConversation)
-      .innerJoin(whatsappNumber, eq(crmConversation.whatsappNumberId, whatsappNumber.id))
-      .where(eq(crmConversation.id, id))
-      .limit(1);
+    // Buscar client + dados da conversation via helper
+    const result = await getUazapiClientForConversation(id);
+    if (!result) return NextResponse.json({ error: "Conversa não encontrada" }, { status: 404 });
 
-    if (!conversation) return NextResponse.json({ error: "Conversa não encontrada" }, { status: 404 });
+    const { client, conversation } = result;
 
-    const baseUrl = process.env.UAZAPI_BASE_URL;
-    if (!baseUrl) return NextResponse.json({ error: "UAZAPI_BASE_URL não configurado" }, { status: 503 });
+    // Enviar via UazapiClient
+    const { messageId } = await client.sendText(
+      conversation.contactPhone,
+      parsed.data.message
+    );
 
-    // Send via Uazapi
-    const uazapiRes = await fetch(`${baseUrl}/sendText`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "SessionKey": conversation.uazapiSession,
-        "Token": conversation.uazapiToken,
-      },
-      body: JSON.stringify({
-        phone: conversation.contactPhone,
-        message: parsed.data.message,
-      }),
-    });
-
-    if (!uazapiRes.ok) {
-      console.error("[CRM] Uazapi send failed:", { operation: "send", status: uazapiRes.status });
-      return NextResponse.json({ error: "Falha ao enviar mensagem" }, { status: 502 });
-    }
-
-    const uazapiData = await uazapiRes.json().catch(() => ({}));
-
-    // Persist outgoing message
+    // Persistir mensagem enviada
     const [msg] = await db
       .insert(crmMessage)
       .values({
         conversationId: id,
-        messageIdWa: uazapiData?.key?.id ?? null,
+        messageIdWa: messageId ?? null,
         direction: "outgoing",
         content: parsed.data.message,
         mediaType: "text",
@@ -82,7 +56,7 @@ export async function POST(
       })
       .returning();
 
-    // Update conversation's last message timestamp
+    // Atualizar timestamp da conversa
     await db
       .update(crmConversation)
       .set({ lastMessageAt: new Date(), updatedAt: new Date() })

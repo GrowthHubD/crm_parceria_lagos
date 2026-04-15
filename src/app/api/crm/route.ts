@@ -1,23 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantContext } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { crmConversation, whatsappNumber } from "@/lib/db/schema/crm";
-import { eq, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 export async function GET(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
-
-    const userRole = ((session.user as { role?: string }).role ?? "operational") as UserRole;
-    const canView = await checkPermission(session.user.id, userRole, "crm", "view");
+    const ctx = await getTenantContext(request.headers);
+    const canView = await checkPermission(ctx.userId, ctx.role as UserRole, "crm", "view", ctx);
     if (!canView) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
     const { searchParams } = new URL(request.url);
     const classification = searchParams.get("classification");
     const numberId = searchParams.get("numberId");
+
+    // Filtrar por tenant
+    const whereConditions = [eq(crmConversation.tenantId, ctx.tenantId)];
+    if (numberId) whereConditions.push(eq(crmConversation.whatsappNumberId, numberId));
+    if (classification) whereConditions.push(eq(crmConversation.classification, classification));
 
     const conversations = await db
       .select({
@@ -35,19 +37,13 @@ export async function GET(request: NextRequest) {
       })
       .from(crmConversation)
       .leftJoin(whatsappNumber, eq(crmConversation.whatsappNumberId, whatsappNumber.id))
-      .where(
-        numberId
-          ? eq(crmConversation.whatsappNumberId, numberId)
-          : classification
-            ? eq(crmConversation.classification, classification)
-            : undefined
-      )
+      .where(and(...whereConditions))
       .orderBy(desc(crmConversation.lastMessageAt));
 
     const numbers = await db
       .select()
       .from(whatsappNumber)
-      .where(eq(whatsappNumber.isActive, true));
+      .where(and(eq(whatsappNumber.isActive, true), eq(whatsappNumber.tenantId, ctx.tenantId)));
 
     return NextResponse.json({ conversations, numbers });
   } catch {

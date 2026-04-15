@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { ArrowLeft, Send, Loader2, Tag } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Tag, UserPlus, GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { toast } from "@/hooks/use-toast";
 
 interface Message {
   id: string;
@@ -22,6 +23,16 @@ interface Conversation {
   contactPushName: string | null;
   classification: string;
   unreadCount: number;
+}
+
+interface LinkedLead {
+  id: string;
+  name: string;
+  companyName: string | null;
+  stageName: string | null;
+  stageColor: string | null;
+  estimatedValue: string | null;
+  isConverted: boolean;
 }
 
 const CLASSIFICATION_OPTIONS = [
@@ -42,9 +53,11 @@ interface ConversationViewProps {
 export function ConversationView({ conversationId, canEdit, onBack, onClassificationChange }: ConversationViewProps) {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [linkedLead, setLinkedLead] = useState<LinkedLead | null>(null);
   const [inputText, setInputText] = useState("");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [linkingLead, setLinkingLead] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const fetchMessages = useCallback(async () => {
@@ -54,10 +67,34 @@ export function ConversationView({ conversationId, canEdit, onBack, onClassifica
         const data = await res.json();
         setConversation(data.conversation);
         setMessages(data.messages);
+        if (data.linkedLead) setLinkedLead(data.linkedLead);
       }
     } catch { /* silent */ }
     finally { setLoading(false); }
   }, [conversationId]);
+
+  const handleCreateLead = async () => {
+    setLinkingLead(true);
+    try {
+      const res = await fetch(`/api/crm/${conversationId}/link-lead`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ createNew: true }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        toast.success("Lead criado!");
+        // Refetch para pegar o lead vinculado
+        fetchMessages();
+      } else {
+        toast.error("Erro ao criar lead");
+      }
+    } catch {
+      toast.error("Erro de conexão");
+    } finally {
+      setLinkingLead(false);
+    }
+  };
 
   useEffect(() => {
     fetchMessages();
@@ -115,6 +152,34 @@ export function ConversationView({ conversationId, canEdit, onBack, onClassifica
           <p className="text-sm font-medium text-foreground truncate">{name}</p>
           <p className="text-small text-muted">{conversation?.contactPhone}</p>
         </div>
+        {/* Lead badge ou botão criar */}
+        {linkedLead ? (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary/10 rounded-lg shrink-0">
+            <GitBranch className="w-3.5 h-3.5 text-primary" />
+            <span className="text-xs font-medium text-primary">{linkedLead.name}</span>
+            {linkedLead.stageName && (
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                style={{
+                  backgroundColor: `${linkedLead.stageColor ?? "#6C5CE7"}20`,
+                  color: linkedLead.stageColor ?? "#6C5CE7",
+                }}
+              >
+                {linkedLead.stageName}
+              </span>
+            )}
+          </div>
+        ) : canEdit && conversation && (
+          <button
+            onClick={handleCreateLead}
+            disabled={linkingLead}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted hover:text-foreground border border-border rounded-lg hover:bg-surface-2 transition-colors cursor-pointer shrink-0"
+          >
+            {linkingLead ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />}
+            Criar Lead
+          </button>
+        )}
+
         {canEdit && conversation && (
           <div className="flex items-center gap-2 shrink-0">
             <Tag className="w-4 h-4 text-muted" />

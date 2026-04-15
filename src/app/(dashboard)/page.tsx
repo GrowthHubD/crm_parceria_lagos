@@ -162,7 +162,7 @@ export default async function DashboardPage() {
   const FUNNEL_EXCLUDE = ["ganho", "perdido", "won", "lost"];
   const funnelStages = stagesWithLeads
     .filter((s) => !FUNNEL_EXCLUDE.some((x) => s.stageName.toLowerCase().includes(x)))
-    .map((s) => ({ name: s.stageName, leads: s.leadCount }));
+    .map((s) => ({ id: s.stageId, name: s.stageName, leads: s.leadCount }));
 
   const totalLeads = stagesWithLeads.reduce((acc, s) => acc + s.leadCount, 0);
 

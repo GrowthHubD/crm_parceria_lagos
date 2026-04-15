@@ -3,8 +3,12 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/tenant";
 import { checkPermission } from "@/lib/permissions";
+import { db } from "@/lib/db";
+import { automation, automationStep } from "@/lib/db/schema/automations";
+import { pipelineStage } from "@/lib/db/schema/pipeline";
+import { eq, asc, desc } from "drizzle-orm";
 import type { UserRole } from "@/types";
-import { Zap } from "lucide-react";
+import { AutomationsList } from "@/components/automations/automations-list";
 
 export const metadata: Metadata = { title: "Automações" };
 
@@ -16,32 +20,37 @@ export default async function AutomationsPage() {
     redirect("/login");
   }
 
-  const hasPermission = await checkPermission(
-    tenantCtx.userId,
-    tenantCtx.role as UserRole,
-    "automations",
-    "view",
-    tenantCtx
-  );
-  if (!hasPermission) redirect("/");
+  const userRole = tenantCtx.role as UserRole;
+  const [canView, canEdit] = await Promise.all([
+    checkPermission(tenantCtx.userId, userRole, "automations", "view", tenantCtx),
+    checkPermission(tenantCtx.userId, userRole, "automations", "edit", tenantCtx),
+  ]);
+  if (!canView) redirect("/");
+
+  const [automations, allSteps, stages] = await Promise.all([
+    db
+      .select()
+      .from(automation)
+      .where(eq(automation.tenantId, tenantCtx.tenantId))
+      .orderBy(desc(automation.createdAt)),
+    db.select().from(automationStep).orderBy(asc(automationStep.order)),
+    db
+      .select({ id: pipelineStage.id, name: pipelineStage.name })
+      .from(pipelineStage)
+      .where(eq(pipelineStage.tenantId, tenantCtx.tenantId))
+      .orderBy(asc(pipelineStage.order)),
+  ]);
+
+  const automationsWithSteps = automations.map((a) => ({
+    ...a,
+    steps: allSteps.filter((s) => s.automationId === a.id),
+  }));
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Automações</h1>
-        <p className="text-muted mt-1">
-          Sequências de follow-up automáticas via WhatsApp
-        </p>
-      </div>
-
-      <div className="flex flex-col items-center justify-center py-20 bg-surface rounded-xl border border-border">
-        <Zap className="w-12 h-12 text-muted mb-4" />
-        <h2 className="text-lg font-semibold text-foreground">Em breve</h2>
-        <p className="text-muted text-sm mt-1 max-w-md text-center">
-          Configure sequências automáticas de mensagens para follow-up de leads.
-          Defina triggers, delays e templates de mensagem.
-        </p>
-      </div>
-    </div>
+    <AutomationsList
+      initialAutomations={automationsWithSteps}
+      stages={stages}
+      canEdit={canEdit}
+    />
   );
 }

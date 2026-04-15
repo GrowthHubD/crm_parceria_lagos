@@ -1,49 +1,13 @@
+/**
+ * Webhook legado (sem instanceId na URL).
+ * Busca whatsappNumber por uazapiSession do payload.
+ * Novo webhook recomendado: /api/webhooks/uazapi/[instanceId]
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage, whatsappNumber } from "@/lib/db/schema/crm";
 import { eq, and } from "drizzle-orm";
-
-// Uazapi v2 webhook payload (incoming message)
-interface UazapiWebhookPayload {
-  event?: string;
-  session?: string; // Uazapi session name
-  data?: {
-    key?: {
-      id?: string;
-      remoteJid?: string; // contact JID, e.g. "5511999999999@s.whatsapp.net"
-      fromMe?: boolean;
-    };
-    message?: {
-      conversation?: string;
-      extendedTextMessage?: { text?: string };
-      imageMessage?: { caption?: string };
-      audioMessage?: Record<string, unknown>;
-      videoMessage?: { caption?: string };
-      documentMessage?: { fileName?: string };
-    };
-    messageType?: string;
-    pushName?: string;
-    messageTimestamp?: number;
-  };
-}
-
-function extractPhone(jid: string): string {
-  return jid.replace(/@.*$/, "").replace(/[^0-9]/g, "");
-}
-
-function extractContent(payload: UazapiWebhookPayload): { content: string | null; mediaType: string } {
-  const msg = payload.data?.message;
-  if (!msg) return { content: null, mediaType: "text" };
-
-  if (msg.conversation) return { content: msg.conversation, mediaType: "text" };
-  if (msg.extendedTextMessage?.text) return { content: msg.extendedTextMessage.text, mediaType: "text" };
-  if (msg.imageMessage) return { content: msg.imageMessage.caption ?? null, mediaType: "image" };
-  if (msg.audioMessage) return { content: null, mediaType: "audio" };
-  if (msg.videoMessage) return { content: msg.videoMessage.caption ?? null, mediaType: "video" };
-  if (msg.documentMessage) return { content: msg.documentMessage.fileName ?? null, mediaType: "document" };
-
-  return { content: null, mediaType: "text" };
-}
+import { extractPhone, extractContent } from "@/lib/uazapi";
 
 export async function POST(request: NextRequest) {
   try {
