@@ -21,6 +21,7 @@ const createSchema = z.object({
   plan: z.enum(["free", "pro", "enterprise"]).optional(),
   adminEmail: z.string().email().optional(),
   adminName: z.string().min(2).max(80).optional(),
+  adminPassword: z.string().min(8).max(72).optional(),
 });
 
 function canAccess(role: string) {
@@ -98,6 +99,7 @@ export async function POST(request: NextRequest) {
       plan: parsed.data.plan,
       adminEmail: parsed.data.adminEmail,
       adminName: parsed.data.adminName,
+      adminPassword: parsed.data.adminPassword,
     });
 
     return NextResponse.json({ client: result }, { status: 201 });

@@ -61,8 +61,11 @@ export function PartnerClientsManager({ initialClients }: Props) {
   const [billingEmail, setBillingEmail] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
   const [adminName, setAdminName] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [plan, setPlan] = useState<"free" | "pro" | "enterprise">("pro");
   const [magicLink, setMagicLink] = useState<string | null>(null);
+  const [createdEmail, setCreatedEmail] = useState<string | null>(null);
+  const [createdPassword, setCreatedPassword] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -79,6 +82,7 @@ export function PartnerClientsManager({ initialClients }: Props) {
           billingEmail: billingEmail.trim() || undefined,
           adminEmail: adminEmail.trim() || undefined,
           adminName: adminName.trim() || undefined,
+          adminPassword: adminPassword.trim() || undefined,
           plan,
         }),
       });
@@ -90,18 +94,19 @@ export function PartnerClientsManager({ initialClients }: Props) {
         return;
       }
 
-      // Se gerou magic link, mostra pro parceiro compartilhar
       const link = data.client?.magicLink as string | undefined;
-      if (link) {
-        setMagicLink(link);
+      const passwordSet = data.client?.passwordSet as boolean | undefined;
+      const createdAdminEmail = data.client?.adminEmail as string | undefined;
+
+      // Mostra banner sempre que houver email de admin (mesmo só com link),
+      // pra parceiro ter referência do email cadastrado.
+      if (link || passwordSet || createdAdminEmail) {
+        if (link) setMagicLink(link);
+        if (createdAdminEmail) setCreatedEmail(createdAdminEmail);
+        if (passwordSet) setCreatedPassword(adminPassword.trim());
       } else {
         setShowForm(false);
-        setName("");
-        setSlug("");
-        setBillingEmail("");
-        setAdminEmail("");
-        setAdminName("");
-        setPlan("pro");
+        resetForm();
       }
       router.refresh();
     } catch {
@@ -109,6 +114,16 @@ export function PartnerClientsManager({ initialClients }: Props) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function resetForm() {
+    setName("");
+    setSlug("");
+    setBillingEmail("");
+    setAdminEmail("");
+    setAdminName("");
+    setAdminPassword("");
+    setPlan("pro");
   }
 
   // Auto-gera slug a partir do nome (pode ser editado depois)
@@ -135,38 +150,81 @@ export function PartnerClientsManager({ initialClients }: Props) {
         </button>
       )}
 
-      {magicLink && (
-        <div className="bg-success/10 border border-success/30 rounded-xl p-4 space-y-2">
-          <p className="font-medium text-success">Cliente criado! Link mágico gerado.</p>
-          <p className="text-small text-muted">
-            Compartilhe este link com o admin do cliente — ao abrir, ele loga automaticamente e conecta o WhatsApp:
-          </p>
-          <div className="flex items-center gap-2 bg-surface-2 rounded-lg p-2">
-            <input
-              type="text"
-              readOnly
-              value={magicLink}
-              className="flex-1 bg-transparent text-xs font-mono outline-none"
-            />
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(magicLink);
-              }}
-              className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:opacity-90"
-            >
-              Copiar
-            </button>
-          </div>
+      {(magicLink || createdEmail || createdPassword) && (
+        <div className="bg-success/10 border border-success/30 rounded-xl p-4 space-y-3">
+          <p className="font-medium text-success">Cliente criado! Credenciais geradas.</p>
+
+          {createdEmail && (
+            <div className="space-y-2">
+              <p className="text-small text-muted">
+                Acesso por <span className="font-semibold">email{createdPassword ? " + senha" : ""}</span>:
+              </p>
+              <div className={`grid gap-2 ${createdPassword ? "sm:grid-cols-2" : ""}`}>
+                <div className="flex items-center gap-2 bg-surface-2 rounded-lg p-2">
+                  <span className="text-xs text-muted/70 shrink-0">Email:</span>
+                  <input
+                    type="text"
+                    readOnly
+                    value={createdEmail}
+                    className="flex-1 bg-transparent text-xs font-mono outline-none"
+                  />
+                  <button
+                    onClick={() => navigator.clipboard.writeText(createdEmail)}
+                    className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:opacity-90"
+                  >
+                    Copiar
+                  </button>
+                </div>
+                {createdPassword && (
+                  <div className="flex items-center gap-2 bg-surface-2 rounded-lg p-2">
+                    <span className="text-xs text-muted/70 shrink-0">Senha:</span>
+                    <input
+                      type="text"
+                      readOnly
+                      value={createdPassword}
+                      className="flex-1 bg-transparent text-xs font-mono outline-none"
+                    />
+                    <button
+                      onClick={() => navigator.clipboard.writeText(createdPassword)}
+                      className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:opacity-90"
+                    >
+                      Copiar
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {magicLink && (
+            <div className="space-y-2">
+              <p className="text-small text-muted">
+                Ou compartilhe este <span className="font-semibold">link exclusivo</span> — ao abrir, loga direto e vai pra conexão do WhatsApp:
+              </p>
+              <div className="flex items-center gap-2 bg-surface-2 rounded-lg p-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={magicLink}
+                  className="flex-1 bg-transparent text-xs font-mono outline-none"
+                />
+                <button
+                  onClick={() => navigator.clipboard.writeText(magicLink)}
+                  className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:opacity-90"
+                >
+                  Copiar
+                </button>
+              </div>
+            </div>
+          )}
+
           <button
             onClick={() => {
               setMagicLink(null);
+              setCreatedEmail(null);
+              setCreatedPassword(null);
               setShowForm(false);
-              setName("");
-              setSlug("");
-              setBillingEmail("");
-              setAdminEmail("");
-              setAdminName("");
-              setPlan("pro");
+              resetForm();
             }}
             className="text-small text-muted hover:text-foreground"
           >
@@ -256,6 +314,22 @@ export function PartnerClientsManager({ initialClients }: Props) {
                 className="w-full px-3 py-2 bg-surface-2 border border-border rounded-lg text-foreground"
                 placeholder="Nome completo"
               />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="text-small text-muted block mb-1">Senha de acesso (opcional)</label>
+              <input
+                type="text"
+                value={adminPassword}
+                onChange={(e) => setAdminPassword(e.target.value)}
+                minLength={8}
+                maxLength={72}
+                className="w-full px-3 py-2 bg-surface-2 border border-border rounded-lg text-foreground font-mono text-sm"
+                placeholder="Mínimo 8 caracteres — deixe vazio para usar só o link mágico"
+              />
+              <p className="text-xs text-muted/70 mt-1">
+                Se preenchida, o cliente poderá logar com email + senha. O link mágico continua sendo gerado como acesso direto.
+              </p>
             </div>
           </div>
 

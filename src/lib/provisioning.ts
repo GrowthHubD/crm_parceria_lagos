@@ -28,6 +28,8 @@ export interface ProvisionClientInput {
   /** Email do admin do cliente. Se fornecido, cria user Supabase Auth + magic link */
   adminEmail?: string;
   adminName?: string;
+  /** Senha opcional. Se fornecida (e o user for novo), permite login por email/senha além do magic link. */
+  adminPassword?: string;
 }
 
 export interface ProvisionClientResult {
@@ -36,6 +38,9 @@ export interface ProvisionClientResult {
   instanceId: string;
   pipelineId: string;
   adminUserId?: string;
+  adminEmail?: string;
+  /** True quando a senha foi efetivamente definida no user (apenas em criação nova). */
+  passwordSet?: boolean;
   magicLink?: string;
   warnings: string[];
 }
@@ -153,6 +158,7 @@ export async function provisionClient(
   // 7) (Opcional) Cria user admin do cliente + magic link
   let adminUserId: string | undefined;
   let magicLink: string | undefined;
+  let passwordSet = false;
 
   if (input.adminEmail) {
     try {
@@ -164,16 +170,22 @@ export async function provisionClient(
 
       if (existing) {
         adminUserId = existing.id;
+        // User pré-existente: NÃO sobrescreve senha silenciosamente.
+        if (input.adminPassword) {
+          warnings.push("Usuário já existia — senha NÃO foi alterada. Use 'esqueci a senha' se necessário.");
+        }
       } else {
         const { data: createData, error: createError } = await supa.auth.admin.createUser({
           email: input.adminEmail,
           email_confirm: true,
           user_metadata: { name: input.adminName ?? input.name },
+          ...(input.adminPassword ? { password: input.adminPassword } : {}),
         });
         if (createError || !createData.user) {
           warnings.push(`Falha ao criar admin: ${createError?.message ?? "unknown"}`);
         } else {
           adminUserId = createData.user.id;
+          passwordSet = !!input.adminPassword;
         }
       }
 
@@ -227,6 +239,8 @@ export async function provisionClient(
     instanceId,
     pipelineId: newPipeline.id,
     adminUserId,
+    adminEmail: input.adminEmail,
+    passwordSet,
     magicLink,
     warnings,
   };

@@ -46,9 +46,10 @@ export type SystemModule =
   | "partner_metrics";  // partner_admin: métricas agregadas dos clientes
 
 // Módulos exclusivos do tenant GH (is_platform_owner)
+// Obs.: "financial" foi liberado para tenants cliente também — cada tenant gere
+// suas próprias receitas/despesas escopadas por tenant_id.
 export const AMS_ONLY_MODULES: SystemModule[] = [
   "contracts",
-  "financial",
   "clients",
   "sdr",
   "kanban",
@@ -190,6 +191,7 @@ export const DEFAULT_PERMISSIONS: Record<
       "dashboard",
       "pipeline",
       "crm",
+      "financial",
       "clients",
       "kanban",
       "agenda",

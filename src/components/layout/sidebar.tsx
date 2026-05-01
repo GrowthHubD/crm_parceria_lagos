@@ -51,6 +51,7 @@ const CRM_MODULES: NavItem[] = [
   { title: "Pipeline", href: "/pipeline", icon: GitBranch, module: "pipeline" },
   { title: "CRM", href: "/crm", icon: MessageSquare, module: "crm" },
   { title: "Tarefas", href: "/tasks", icon: CheckSquare, module: "tasks" },
+  { title: "Financeiro", href: "/financeiro", icon: DollarSign, module: "financial" },
   { title: "Agenda", href: "/agenda", icon: CalendarDays, module: "agenda" },
   { title: "Automações", href: "/automations", icon: Zap, module: "automations" },
 ];
@@ -58,7 +59,6 @@ const CRM_MODULES: NavItem[] = [
 // Módulos AMS (exclusivos do tenant GH — is_platform_owner)
 const AMS_MODULES: NavItem[] = [
   { title: "Contratos", href: "/contratos", icon: FileText, module: "contracts" },
-  { title: "Financeiro", href: "/financeiro", icon: DollarSign, module: "financial" },
   { title: "Clientes", href: "/clientes", icon: Users, module: "clients" },
   { title: "Agente SDR", href: "/sdr", icon: Bot, module: "sdr" },
   { title: "Kanban", href: "/kanban", icon: Kanban, module: "kanban" },
