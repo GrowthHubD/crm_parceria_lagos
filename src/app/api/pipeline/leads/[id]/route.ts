@@ -54,10 +54,22 @@ export async function PATCH(
     if (data.notes !== undefined) updates.notes = data.notes;
     if (data.assignedTo !== undefined) updates.assignedTo = data.assignedTo;
 
+    // Se está mudando o stageId, valida que pertence ao mesmo tenant.
+    if (data.stageId) {
+      const [targetStage] = await db
+        .select({ id: pipelineStage.id })
+        .from(pipelineStage)
+        .where(and(eq(pipelineStage.id, data.stageId), eq(pipelineStage.tenantId, ctx.tenantId)))
+        .limit(1);
+      if (!targetStage) {
+        return NextResponse.json({ error: "Etapa de destino inválida" }, { status: 400 });
+      }
+    }
+
     const [updated] = await db
       .update(lead)
       .set(updates)
-      .where(eq(lead.id, id))
+      .where(and(eq(lead.id, id), eq(lead.tenantId, ctx.tenantId)))
       .returning();
 
     if (!updated) return NextResponse.json({ error: "Lead não encontrado" }, { status: 404 });
@@ -68,24 +80,28 @@ export async function PATCH(
         const [stage] = await db
           .select({ isWon: pipelineStage.isWon })
           .from(pipelineStage)
-          .where(eq(pipelineStage.id, data.stageId))
+          .where(and(eq(pipelineStage.id, data.stageId), eq(pipelineStage.tenantId, ctx.tenantId)))
           .limit(1);
 
         if (stage?.isWon && !updated.isConverted) {
-          // Marcar lead como convertido
-          await db.update(lead).set({ isConverted: true }).where(eq(lead.id, id));
+          // Marcar lead como convertido (escopo tenant)
+          await db
+            .update(lead)
+            .set({ isConverted: true })
+            .where(and(eq(lead.id, id), eq(lead.tenantId, ctx.tenantId)));
           const companyName = updated.companyName || updated.name;
           const email = updated.email || null;
 
-          // Avoid duplicate: check by companyName + email
+          // Avoid duplicate: check by companyName + email NO escopo do tenant atual
           const existing = await db
             .select({ id: client.id })
             .from(client)
-            .where(eq(client.companyName, companyName))
+            .where(and(eq(client.companyName, companyName), eq(client.tenantId, ctx.tenantId)))
             .limit(1);
 
           if (existing.length === 0) {
             await db.insert(client).values({
+              tenantId: ctx.tenantId,
               companyName,
               responsibleName: updated.name,
               email,
@@ -165,7 +181,7 @@ export async function DELETE(
 
     const [deleted] = await db
       .delete(lead)
-      .where(eq(lead.id, id))
+      .where(and(eq(lead.id, id), eq(lead.tenantId, ctx.tenantId)))
       .returning({ id: lead.id });
 
     if (!deleted) return NextResponse.json({ error: "Lead não encontrado" }, { status: 404 });

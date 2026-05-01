@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { client, clientResponsible } from "@/lib/db/schema/clients";
-import { user } from "@/lib/db/schema/users";
 import { eq, ilike, or, and, desc } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
@@ -32,18 +32,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
     }
 
+    const tenantId = await getTenantId(request.headers);
+
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search") ?? "";
     const status = searchParams.get("status");
 
-    const conditions = [];
+    const conditions = [eq(client.tenantId, tenantId)];
     if (search) {
-      conditions.push(
-        or(
-          ilike(client.companyName, `%${search}%`),
-          ilike(client.responsibleName, `%${search}%`)
-        )
+      const orCondition = or(
+        ilike(client.companyName, `%${search}%`),
+        ilike(client.responsibleName, `%${search}%`)
       );
+      if (orCondition) conditions.push(orCondition);
     }
     if (status && (status === "active" || status === "inactive")) {
       conditions.push(eq(client.status, status));
@@ -64,7 +65,7 @@ export async function GET(request: NextRequest) {
         updatedAt: client.updatedAt,
       })
       .from(client)
-      .where(conditions.length > 1 ? and(...conditions) : conditions[0])
+      .where(and(...conditions))
       .orderBy(desc(client.createdAt));
 
     return NextResponse.json({ clients });
@@ -94,9 +95,11 @@ export async function POST(request: NextRequest) {
     }
 
     const data = parsed.data;
+    const tenantId = await getTenantId(request.headers);
     const [newClient] = await db
       .insert(client)
       .values({
+        tenantId,
         companyName: data.companyName,
         cnpj: data.cnpj ?? null,
         responsibleName: data.responsibleName,

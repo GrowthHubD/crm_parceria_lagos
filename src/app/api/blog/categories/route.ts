@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { blogCategory } from "@/lib/db/schema/blog";
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 const createSchema = z.object({
@@ -24,9 +25,11 @@ export async function GET(request: NextRequest) {
     const canView = await checkPermission(session.user.id, userRole, "blog", "view");
     if (!canView) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
+    const tenantId = await getTenantId(request.headers);
     const categories = await db
       .select()
       .from(blogCategory)
+      .where(eq(blogCategory.tenantId, tenantId))
       .orderBy(asc(blogCategory.order), asc(blogCategory.name));
 
     return NextResponse.json({ categories });
@@ -51,7 +54,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Dados inválidos", details: parsed.error.flatten() }, { status: 400 });
     }
 
-    const [category] = await db.insert(blogCategory).values(parsed.data).returning();
+    const tenantId = await getTenantId(request.headers);
+    const [category] = await db
+      .insert(blogCategory)
+      .values({ tenantId, ...parsed.data })
+      .returning();
     return NextResponse.json({ category }, { status: 201 });
   } catch {
     console.error("[BLOG] POST category failed");

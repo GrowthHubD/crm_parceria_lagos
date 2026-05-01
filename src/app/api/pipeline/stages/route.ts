@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
-import { pipelineStage } from "@/lib/db/schema/pipeline";
-import { sql, eq, ne } from "drizzle-orm";
+import { pipeline, pipelineStage } from "@/lib/db/schema/pipeline";
+import { sql, eq, ne, and } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 export async function POST(request: NextRequest) {
@@ -19,15 +20,25 @@ export async function POST(request: NextRequest) {
   if (!name?.trim()) return NextResponse.json({ error: "Nome obrigatório" }, { status: 400 });
   if (!pipelineId) return NextResponse.json({ error: "Pipeline ID obrigatório" }, { status: 400 });
 
-  // Get next order value within this pipeline
+  const tenantId = await getTenantId(request.headers);
+
+  // Valida que o pipeline pertence ao tenant atual (impede inserir stage em pipeline de outro tenant)
+  const [pipelineRow] = await db
+    .select({ id: pipeline.id })
+    .from(pipeline)
+    .where(and(eq(pipeline.id, pipelineId), eq(pipeline.tenantId, tenantId)))
+    .limit(1);
+  if (!pipelineRow) return NextResponse.json({ error: "Pipeline não encontrado" }, { status: 404 });
+
+  // Get next order value within this pipeline (já escopado pelo pipelineId, mas defesa em profundidade)
   const [{ maxOrder }] = await db
     .select({ maxOrder: sql<number>`coalesce(max("order"), 0)` })
     .from(pipelineStage)
-    .where(eq(pipelineStage.pipelineId, pipelineId));
+    .where(and(eq(pipelineStage.pipelineId, pipelineId), eq(pipelineStage.tenantId, tenantId)));
 
   const [stage] = await db
     .insert(pipelineStage)
-    .values({ name: name.trim(), order: (maxOrder ?? 0) + 1, color: color ?? null, pipelineId })
+    .values({ tenantId, name: name.trim(), order: (maxOrder ?? 0) + 1, color: color ?? null, pipelineId })
     .returning();
 
   return NextResponse.json(stage, { status: 201 });
@@ -44,9 +55,14 @@ export async function PATCH(request: NextRequest) {
   const { id, isWon, name, color } = await request.json();
   if (!id) return NextResponse.json({ error: "ID obrigatório" }, { status: 400 });
 
-  // Only one stage can be the "won" stage — clear others first
+  const tenantId = await getTenantId(request.headers);
+
+  // Only one stage can be the "won" stage — clear others within THIS tenant only
   if (isWon === true) {
-    await db.update(pipelineStage).set({ isWon: false }).where(ne(pipelineStage.id, id));
+    await db
+      .update(pipelineStage)
+      .set({ isWon: false })
+      .where(and(ne(pipelineStage.id, id), eq(pipelineStage.tenantId, tenantId)));
   }
 
   const updates: Record<string, unknown> = {};
@@ -57,7 +73,7 @@ export async function PATCH(request: NextRequest) {
   const [updated] = await db
     .update(pipelineStage)
     .set(updates)
-    .where(eq(pipelineStage.id, id))
+    .where(and(eq(pipelineStage.id, id), eq(pipelineStage.tenantId, tenantId)))
     .returning();
 
   return NextResponse.json(updated);

@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 const createLeadSchema = z.object({
@@ -39,12 +40,13 @@ export async function POST(request: NextRequest) {
     }
 
     const data = parsed.data;
+    const tenantId = await getTenantId(request.headers);
 
-    // Validate stage exists
+    // Validate stage exists AND belongs to current tenant (impede colocar lead em stage de outro tenant)
     const [stage] = await db
       .select({ id: pipelineStage.id })
       .from(pipelineStage)
-      .where(eq(pipelineStage.id, data.stageId))
+      .where(and(eq(pipelineStage.id, data.stageId), eq(pipelineStage.tenantId, tenantId)))
       .limit(1);
 
     if (!stage) {
@@ -54,6 +56,7 @@ export async function POST(request: NextRequest) {
     const [newLead] = await db
       .insert(lead)
       .values({
+        tenantId,
         name: data.name,
         companyName: data.companyName ?? null,
         email: data.email || null,

@@ -47,7 +47,18 @@ export async function POST(
       .limit(1);
     if (!version) return NextResponse.json({ error: "Versão não encontrada" }, { status: 404 });
 
-    // Busca step atual (se ainda existe — stepId pode ter sido deletado)
+    // Se stepId é null, o step original foi deletado — cria novo direto.
+    if (!version.stepId) {
+      await db.insert(automationStep).values({
+        automationId: id,
+        order: 1,
+        type: version.stepType,
+        config: version.config,
+      });
+      return NextResponse.json({ ok: true, restored: true, recreated: true });
+    }
+
+    // Busca step atual (se ainda existe)
     const [currentStep] = await db
       .select()
       .from(automationStep)
@@ -55,7 +66,7 @@ export async function POST(
       .limit(1);
 
     if (!currentStep) {
-      // Step foi deletado — cria novo com o config da versão
+      // Step foi deletado entre as duas queries — cria novo com o config da versão
       await db.insert(automationStep).values({
         automationId: id,
         order: 1,

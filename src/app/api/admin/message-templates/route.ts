@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { getTenantContext } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { messageTemplate } from "@/lib/db/schema/settings";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 const TEMPLATE_DEFAULTS: Array<{ id: string; label: string; body: string }> = [
@@ -43,7 +43,10 @@ export async function GET() {
 
     let rows: typeof TEMPLATE_DEFAULTS = [];
     try {
-      const dbRows = await db.select().from(messageTemplate);
+      const dbRows = await db
+        .select()
+        .from(messageTemplate)
+        .where(eq(messageTemplate.tenantId, ctx.tenantId));
       const dbMap = new Map(dbRows.map((r) => [r.id, r]));
 
       rows = TEMPLATE_DEFAULTS.map((def) => {
@@ -95,21 +98,22 @@ export async function PATCH(request: NextRequest) {
 
     const label = validId.label;
 
-    // Upsert
+    // Upsert escopado por (id, tenantId) — unique constraint uq_template_tenant
     const existing = await db
       .select({ id: messageTemplate.id })
       .from(messageTemplate)
-      .where(eq(messageTemplate.id, id))
+      .where(and(eq(messageTemplate.id, id), eq(messageTemplate.tenantId, ctx.tenantId)))
       .limit(1);
 
     if (existing.length > 0) {
       await db
         .update(messageTemplate)
         .set({ body: templateBody.trim(), updatedAt: new Date(), updatedBy: ctx.userId })
-        .where(eq(messageTemplate.id, id));
+        .where(and(eq(messageTemplate.id, id), eq(messageTemplate.tenantId, ctx.tenantId)));
     } else {
       await db.insert(messageTemplate).values({
         id,
+        tenantId: ctx.tenantId,
         label,
         body: templateBody.trim(),
         updatedBy: ctx.userId,
@@ -138,7 +142,9 @@ export async function DELETE(request: NextRequest) {
     const id = searchParams.get("id");
     if (!id) return NextResponse.json({ error: "ID obrigatório" }, { status: 400 });
 
-    await db.delete(messageTemplate).where(eq(messageTemplate.id, id));
+    await db
+      .delete(messageTemplate)
+      .where(and(eq(messageTemplate.id, id), eq(messageTemplate.tenantId, ctx.tenantId)));
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("[ADMIN] DELETE message-template failed:", error);

@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { contract } from "@/lib/db/schema/contracts";
 import { client } from "@/lib/db/schema/clients";
 import { financialTransaction } from "@/lib/db/schema/financial";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type { UserRole } from "@/types";
 import { format } from "date-fns";
 
@@ -40,6 +41,8 @@ export async function GET(
       return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
     }
 
+    const tenantId = await getTenantId(request.headers);
+
     const [contractData] = await db
       .select({
         id: contract.id,
@@ -63,7 +66,7 @@ export async function GET(
       })
       .from(contract)
       .leftJoin(client, eq(contract.clientId, client.id))
-      .where(eq(contract.id, id))
+      .where(and(eq(contract.id, id), eq(contract.tenantId, tenantId)))
       .limit(1);
 
     if (!contractData) {
@@ -114,17 +117,19 @@ export async function PATCH(
     if (data.driveFileId !== undefined) updates.driveFileId = data.driveFileId;
     if (data.notes !== undefined) updates.notes = data.notes;
 
-    // Fetch current state before update to detect status transition
+    const tenantId = await getTenantId(request.headers);
+
+    // Fetch current state before update to detect status transition (escopo tenant)
     const [before] = await db
       .select({ status: contract.status, monthlyValue: contract.monthlyValue, clientId: contract.clientId, companyName: contract.companyName, startDate: contract.startDate })
       .from(contract)
-      .where(eq(contract.id, id))
+      .where(and(eq(contract.id, id), eq(contract.tenantId, tenantId)))
       .limit(1);
 
     const [updated] = await db
       .update(contract)
       .set(updates)
-      .where(eq(contract.id, id))
+      .where(and(eq(contract.id, id), eq(contract.tenantId, tenantId)))
       .returning();
 
     if (!updated) {
@@ -141,6 +146,7 @@ export async function PATCH(
           const transactionDate = format(now, "yyyy-MM-dd");
           const dueDate = updated.startDate > transactionDate ? updated.startDate : transactionDate;
           await db.insert(financialTransaction).values({
+            tenantId,
             name: `Mensalidade — ${updated.companyName}`,
             type: "income",
             category: "cliente",
@@ -184,9 +190,10 @@ export async function DELETE(
       return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
     }
 
+    const tenantId = await getTenantId(request.headers);
     const [deleted] = await db
       .delete(contract)
-      .where(eq(contract.id, id))
+      .where(and(eq(contract.id, id), eq(contract.tenantId, tenantId)))
       .returning({ id: contract.id });
 
     if (!deleted) {

@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { financialTransaction } from "@/lib/db/schema/financial";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 const updateSchema = z.object({
@@ -54,10 +55,11 @@ export async function PATCH(
     if (d.clientId !== undefined) updates.clientId = d.clientId;
     if (d.notes !== undefined) updates.notes = d.notes;
 
+    const tenantId = await getTenantId(request.headers);
     const [updated] = await db
       .update(financialTransaction)
       .set(updates)
-      .where(eq(financialTransaction.id, id))
+      .where(and(eq(financialTransaction.id, id), eq(financialTransaction.tenantId, tenantId)))
       .returning();
 
     if (!updated) return NextResponse.json({ error: "Transação não encontrada" }, { status: 404 });
@@ -81,9 +83,10 @@ export async function DELETE(
     const canDelete = await checkPermission(session.user.id, userRole, "financial", "delete");
     if (!canDelete) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
+    const tenantId = await getTenantId(request.headers);
     const [deleted] = await db
       .delete(financialTransaction)
-      .where(eq(financialTransaction.id, id))
+      .where(and(eq(financialTransaction.id, id), eq(financialTransaction.tenantId, tenantId)))
       .returning({ id: financialTransaction.id });
 
     if (!deleted) return NextResponse.json({ error: "Transação não encontrada" }, { status: 404 });

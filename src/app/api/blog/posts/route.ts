@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { blogPost, blogCategory } from "@/lib/db/schema/blog";
 import { user } from "@/lib/db/schema/users";
@@ -28,11 +29,13 @@ export async function GET(request: NextRequest) {
     const canView = await checkPermission(session.user.id, userRole, "blog", "view");
     if (!canView) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
+    const tenantId = await getTenantId(request.headers);
+
     const { searchParams } = new URL(request.url);
     const categoryId = searchParams.get("categoryId");
     const publishedOnly = searchParams.get("published") === "true";
 
-    const conditions = [];
+    const conditions = [eq(blogPost.tenantId, tenantId)];
     if (categoryId) conditions.push(eq(blogPost.categoryId, categoryId));
     if (publishedOnly) conditions.push(eq(blogPost.isPublished, true));
 
@@ -57,7 +60,7 @@ export async function GET(request: NextRequest) {
       .from(blogPost)
       .leftJoin(blogCategory, eq(blogPost.categoryId, blogCategory.id))
       .leftJoin(user, eq(blogPost.authorId, user.id))
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .where(and(...conditions))
       .orderBy(desc(blogPost.updatedAt));
 
     return NextResponse.json({ posts });
@@ -83,9 +86,20 @@ export async function POST(request: NextRequest) {
     }
 
     const d = parsed.data;
+    const tenantId = await getTenantId(request.headers);
+
+    // Valida que a categoria pertence ao tenant atual.
+    const [cat] = await db
+      .select({ id: blogCategory.id })
+      .from(blogCategory)
+      .where(and(eq(blogCategory.id, d.categoryId), eq(blogCategory.tenantId, tenantId)))
+      .limit(1);
+    if (!cat) return NextResponse.json({ error: "Categoria não encontrada" }, { status: 404 });
+
     const [post] = await db
       .insert(blogPost)
       .values({
+        tenantId,
         title: d.title,
         slug: d.slug,
         content: d.content,

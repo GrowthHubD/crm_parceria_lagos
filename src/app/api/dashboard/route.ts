@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { contract } from "@/lib/db/schema/contracts";
 import { client } from "@/lib/db/schema/clients";
@@ -20,6 +21,7 @@ export async function GET(request: NextRequest) {
     const canView = await checkPermission(session.user.id, userRole, "dashboard", "view");
     if (!canView) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
+    const tenantId = await getTenantId(request.headers);
     const now = new Date();
 
     // --- KPI queries in parallel ---
@@ -78,6 +80,7 @@ export async function GET(request: NextRequest) {
           .from(financialTransaction)
           .where(
             and(
+              eq(financialTransaction.tenantId, tenantId),
               eq(financialTransaction.type, "income"),
               gte(financialTransaction.transactionDate, start),
               lte(financialTransaction.transactionDate, end)
@@ -88,6 +91,7 @@ export async function GET(request: NextRequest) {
           .from(financialTransaction)
           .where(
             and(
+              eq(financialTransaction.tenantId, tenantId),
               eq(financialTransaction.type, "expense"),
               gte(financialTransaction.transactionDate, start),
               lte(financialTransaction.transactionDate, end)

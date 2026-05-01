@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { financialTransaction } from "@/lib/db/schema/financial";
 import { eq, and, gte, lte, desc } from "drizzle-orm";
@@ -30,11 +31,13 @@ export async function GET(request: NextRequest) {
     const canView = await checkPermission(session.user.id, userRole, "financial", "view");
     if (!canView) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
+    const tenantId = await getTenantId(request.headers);
+
     const { searchParams } = new URL(request.url);
     const month = searchParams.get("month"); // format: "2025-03"
     const type = searchParams.get("type");
 
-    const conditions = [];
+    const conditions = [eq(financialTransaction.tenantId, tenantId)];
     if (month) {
       const [year, m] = month.split("-").map(Number);
       const start = `${year}-${String(m).padStart(2, "0")}-01`;
@@ -50,7 +53,7 @@ export async function GET(request: NextRequest) {
     const transactions = await db
       .select()
       .from(financialTransaction)
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .where(and(...conditions))
       .orderBy(desc(financialTransaction.transactionDate));
 
     return NextResponse.json({ transactions });
@@ -69,6 +72,8 @@ export async function POST(request: NextRequest) {
     const canEdit = await checkPermission(session.user.id, userRole, "financial", "edit");
     if (!canEdit) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
+    const tenantId = await getTenantId(request.headers);
+
     const body = await request.json();
     const parsed = createSchema.safeParse(body);
     if (!parsed.success) {
@@ -79,6 +84,7 @@ export async function POST(request: NextRequest) {
     const [tx] = await db
       .insert(financialTransaction)
       .values({
+        tenantId,
         name: d.name,
         type: d.type,
         category: d.category,

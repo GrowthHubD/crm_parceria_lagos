@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { leadTag } from "@/lib/db/schema/pipeline";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 export async function GET(request: NextRequest) {
@@ -14,7 +15,12 @@ export async function GET(request: NextRequest) {
   const canView = await checkPermission(session.user.id, userRole, "pipeline", "view");
   if (!canView) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
-  const tags = await db.select().from(leadTag).orderBy(leadTag.name);
+  const tenantId = await getTenantId(request.headers);
+  const tags = await db
+    .select()
+    .from(leadTag)
+    .where(eq(leadTag.tenantId, tenantId))
+    .orderBy(leadTag.name);
   return NextResponse.json(tags);
 }
 
@@ -30,7 +36,11 @@ export async function POST(request: NextRequest) {
   const { name, color } = body;
   if (!name?.trim()) return NextResponse.json({ error: "Nome obrigatório" }, { status: 400 });
 
-  const [tag] = await db.insert(leadTag).values({ name: name.trim(), color: color ?? "#6366f1" }).returning();
+  const tenantId = await getTenantId(request.headers);
+  const [tag] = await db
+    .insert(leadTag)
+    .values({ tenantId, name: name.trim(), color: color ?? "#6366f1" })
+    .returning();
   return NextResponse.json(tag, { status: 201 });
 }
 
@@ -45,6 +55,9 @@ export async function DELETE(request: NextRequest) {
   const { id } = await request.json();
   if (!id) return NextResponse.json({ error: "ID obrigatório" }, { status: 400 });
 
-  await db.delete(leadTag).where(eq(leadTag.id, id));
+  const tenantId = await getTenantId(request.headers);
+  await db
+    .delete(leadTag)
+    .where(and(eq(leadTag.id, id), eq(leadTag.tenantId, tenantId)));
   return NextResponse.json({ ok: true });
 }

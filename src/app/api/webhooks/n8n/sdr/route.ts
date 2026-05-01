@@ -33,9 +33,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { sdrAgent, sdrMetricSnapshot } from "@/lib/db/schema/sdr";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { GH_TENANT_ID } from "@/types";
 
 const payloadSchema = z.object({
+  // tenantId opcional: se omitido, default GH (compat com n8n legado).
+  // Para clientes Lagos, n8n DEVE enviar o tenantId correto.
+  tenantId: z.string().uuid().optional(),
   agentName: z.string().min(1),
   periodStart: z.string().min(1),
   periodEnd: z.string().min(1),
@@ -75,18 +79,19 @@ export async function POST(request: NextRequest) {
     }
 
     const d = parsed.data;
+    const tenantId = d.tenantId ?? GH_TENANT_ID;
 
-    // Look up agent by name — create if not found
+    // Look up agent by name + tenant — create if not found
     let [agent] = await db
       .select()
       .from(sdrAgent)
-      .where(eq(sdrAgent.name, d.agentName))
+      .where(and(eq(sdrAgent.name, d.agentName), eq(sdrAgent.tenantId, tenantId)))
       .limit(1);
 
     if (!agent) {
       [agent] = await db
         .insert(sdrAgent)
-        .values({ name: d.agentName, isActive: true })
+        .values({ tenantId, name: d.agentName, isActive: true })
         .returning();
     }
 

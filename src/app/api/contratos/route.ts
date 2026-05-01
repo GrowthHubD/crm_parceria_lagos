@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { contract } from "@/lib/db/schema/contracts";
 import { client } from "@/lib/db/schema/clients";
@@ -33,11 +34,13 @@ export async function GET(request: NextRequest) {
     const canView = await checkPermission(session.user.id, userRole, "contracts", "view");
     if (!canView) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
+    const tenantId = await getTenantId(request.headers);
+
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search") ?? "";
     const status = searchParams.get("status");
 
-    const conditions = [];
+    const conditions = [eq(contract.tenantId, tenantId)];
     if (search) conditions.push(ilike(contract.companyName, `%${search}%`));
     if (status && ["active", "expiring", "inactive"].includes(status)) {
       conditions.push(eq(contract.status, status));
@@ -46,7 +49,7 @@ export async function GET(request: NextRequest) {
     const contracts = await db
       .select()
       .from(contract)
-      .where(conditions.length === 1 ? conditions[0] : conditions.length > 1 ? and(...conditions) : undefined)
+      .where(and(...conditions))
       .orderBy(desc(contract.createdAt));
 
     return NextResponse.json({ contracts });
@@ -72,16 +75,19 @@ export async function POST(request: NextRequest) {
     }
 
     const data = parsed.data;
+    const tenantId = await getTenantId(request.headers);
 
+    // Valida que o cliente pertence ao tenant atual (impede contrato cross-tenant).
     const [existingClient] = await db
       .select({ id: client.id })
       .from(client)
-      .where(eq(client.id, data.clientId))
+      .where(and(eq(client.id, data.clientId), eq(client.tenantId, tenantId)))
       .limit(1);
 
     if (!existingClient) return NextResponse.json({ error: "Cliente não encontrado" }, { status: 404 });
 
     const [newContract] = await db.insert(contract).values({
+      tenantId,
       clientId: data.clientId,
       companyName: data.companyName,
       monthlyValue: String(data.monthlyValue),
@@ -98,7 +104,7 @@ export async function POST(request: NextRequest) {
     // ── Auto-create pending financial transaction for active contracts ────
     if (data.status === "active" && data.monthlyValue > 0) {
       try {
-        await createContractTransaction(newContract.id, data.clientId, data.companyName, data.monthlyValue, data.startDate, session.user.id);
+        await createContractTransaction(tenantId, newContract.id, data.clientId, data.companyName, data.monthlyValue, data.startDate, session.user.id);
       } catch {
         // Best-effort — don't fail contract creation
       }
@@ -113,6 +119,7 @@ export async function POST(request: NextRequest) {
 
 /** Creates a pending monthly income transaction for a contract. */
 async function createContractTransaction(
+  tenantId: string,
   contractId: string,
   clientId: string,
   companyName: string,
@@ -126,6 +133,7 @@ async function createContractTransaction(
   const dueDate = startDate > transactionDate ? startDate : transactionDate;
 
   await db.insert(financialTransaction).values({
+    tenantId,
     name: `Mensalidade — ${companyName}`,
     type: "income",
     category: "cliente",

@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { checkPermission } from "@/lib/permissions";
+import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { sdrAgent } from "@/lib/db/schema/sdr";
-import { eq, asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 const createSchema = z.object({
@@ -22,7 +23,12 @@ export async function GET(request: NextRequest) {
     const canView = await checkPermission(session.user.id, userRole, "sdr", "view");
     if (!canView) return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
 
-    const agents = await db.select().from(sdrAgent).orderBy(asc(sdrAgent.name));
+    const tenantId = await getTenantId(request.headers);
+    const agents = await db
+      .select()
+      .from(sdrAgent)
+      .where(eq(sdrAgent.tenantId, tenantId))
+      .orderBy(asc(sdrAgent.name));
     return NextResponse.json({ agents });
   } catch {
     console.error("[SDR] GET agents failed");
@@ -45,7 +51,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Dados inválidos", details: parsed.error.flatten() }, { status: 400 });
     }
 
-    const [agent] = await db.insert(sdrAgent).values(parsed.data).returning();
+    const tenantId = await getTenantId(request.headers);
+    const [agent] = await db
+      .insert(sdrAgent)
+      .values({ tenantId, ...parsed.data })
+      .returning();
     return NextResponse.json({ agent }, { status: 201 });
   } catch {
     console.error("[SDR] POST agent failed");
