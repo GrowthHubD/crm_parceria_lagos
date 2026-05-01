@@ -52,6 +52,12 @@ localConnectionString = "postgresql://placeholder:placeholder@localhost:5432/pla
 # Variáveis públicas (não-secretas). Secretas vão via `wrangler secret put NOME`.
 [vars]
 WHATSAPP_PROVIDER = "uazapi"
+# Base URL da Uazapi v2 — fica como FALLBACK (default sano) caso o secret
+# UAZAPI_BASE_URL seja apagado. Hoje existe um secret de mesmo nome com
+# precedência sobre essa var. Para mudar de servidor Uazapi em prod, atualize
+# o secret: `wrangler secret put UAZAPI_BASE_URL`.
+# O token admin (UAZAPI_ADMIN_TOKEN) é APENAS secret: `wrangler secret put UAZAPI_ADMIN_TOKEN`.
+UAZAPI_BASE_URL = "https://williphone.uazapi.com"
 AUTOMATION_DRY_RUN = "false"
 AUTOMATION_TICK_DISABLED = "true" # ticker setInterval desligado — Cron Trigger toma conta
 # URL pública da app — usada em magic links (Supabase) e na config de webhook

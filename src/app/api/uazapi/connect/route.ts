@@ -37,11 +37,12 @@ export async function POST(request: NextRequest) {
 
     if (!tenantData) return NextResponse.json({ error: "Tenant não encontrado" }, { status: 404 });
 
-    // Webhook URL depende do provider
+    // Webhook URL depende do provider — fallback evita "undefined/api/..." se env faltar.
+    const appBase = process.env.NEXT_PUBLIC_APP_URL ?? process.env.APP_URL ?? new URL(request.url).origin;
     const webhookPath = WHATSAPP_PROVIDER === "uazapi"
       ? "/api/webhooks/uazapi/v2"
       : "/api/webhooks/evolution";
-    const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL}${webhookPath}`;
+    const webhookUrl = `${appBase}${webhookPath}`;
 
     let [wNum] = await db
       .select()
@@ -53,15 +54,22 @@ export async function POST(request: NextRequest) {
       ? wNum.uazapiSession
       : null;
 
-    // ── 1) Se já tem instância, checar se está aberta
+    // ── 1) Se já tem instância, checar se está aberta.
+    // try/catch porque a instância pode ter sido apagada do lado Uazapi (404) —
+    // nesse caso seguimos pro fluxo de recriação ao invés de quebrar com 500.
     if (savedInstanceId) {
-      const status = await getStatus(savedInstanceId, wNum!.uazapiToken || undefined);
-      if (status.state === "open") {
-        return NextResponse.json({
-          status: "connected",
-          phoneNumber: status.phoneNumber ?? wNum!.phoneNumber,
-          instanceId: wNum!.id,
-        });
+      try {
+        const status = await getStatus(savedInstanceId, wNum!.uazapiToken || undefined);
+        if (status.state === "open") {
+          return NextResponse.json({
+            status: "connected",
+            phoneNumber: status.phoneNumber ?? wNum!.phoneNumber,
+            instanceId: wNum!.id,
+          });
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn("[WHATSAPP] getStatus falhou para instância salva, recriando:", msg);
       }
     }
 
@@ -71,10 +79,15 @@ export async function POST(request: NextRequest) {
     const createResult = await createInstance(effectiveInstanceId, webhookUrl);
     if (!createResult.ok) {
       console.error("[WHATSAPP] createInstance failed for tenant", targetTenantId, "—", createResult.error);
-      return NextResponse.json(
-        { error: "Erro ao conectar, falar com suporte" },
-        { status: 502 }
-      );
+      const detail = createResult.error ?? "unknown";
+      const isAuth = /401|403|admintoken|unauthorized/i.test(detail);
+      const isNetwork = /fetch failed|ENOTFOUND|ECONNREFUSED|timeout/i.test(detail);
+      const userMsg = isAuth
+        ? "Provider WhatsApp recusou autenticação (verifique UAZAPI_ADMIN_TOKEN)"
+        : isNetwork
+        ? "Provider WhatsApp inacessível (verifique UAZAPI_BASE_URL e conectividade)"
+        : `Falha ao criar instância: ${detail.slice(0, 200)}`;
+      return NextResponse.json({ error: userMsg, step: "createInstance" }, { status: 502 });
     }
     const instanceToken = createResult.token ?? wNum?.uazapiToken ?? "";
 
@@ -110,10 +123,27 @@ export async function POST(request: NextRequest) {
     await setWebhook(effectiveInstanceId, webhookUrl, instanceToken || undefined);
 
     // ── 5) Buscar QR code
-    const qr = await getQrCode(effectiveInstanceId, instanceToken || undefined);
+    let qr;
+    try {
+      qr = await getQrCode(effectiveInstanceId, instanceToken || undefined);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[WHATSAPP] getQrCode failed for tenant", targetTenantId, "—", msg);
+      return NextResponse.json(
+        { error: `Falha ao gerar QR: ${msg.slice(0, 200)}`, step: "getQrCode" },
+        { status: 502 }
+      );
+    }
 
     if (qr.connected) {
       return NextResponse.json({ status: "connected", instanceId: wNum.id });
+    }
+
+    if (!qr.qrCode) {
+      return NextResponse.json(
+        { error: "Provider devolveu resposta vazia (sem QR e sem conexão)", step: "getQrCode" },
+        { status: 502 }
+      );
     }
 
     return NextResponse.json({
@@ -122,7 +152,8 @@ export async function POST(request: NextRequest) {
       instanceId: wNum.id,
     });
   } catch (e) {
-    console.error("[WHATSAPP] Connect failed:", e);
-    return NextResponse.json({ error: "Erro interno" }, { status: 500 });
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[WHATSAPP] Connect failed:", msg);
+    return NextResponse.json({ error: `Erro interno: ${msg.slice(0, 200)}` }, { status: 500 });
   }
 }
