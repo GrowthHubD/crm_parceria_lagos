@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { auth } from "./auth";
 import { db } from "./db";
 import { user, userTenant } from "./db/schema/users";
@@ -96,8 +96,12 @@ export async function getTenantContext(
 
   if (!session) throw new Error("UNAUTHENTICATED");
 
-  // Cache de tenant context no KV — evita round-trip ao banco em toda navegação
-  const kv = getTenantKV();
+  const tenantOverride = headers.get("x-tenant-id");
+
+  // Cache só vale para o lookup default (sem override). Override é dinâmico
+  // por request — cachear ele faria com que a próxima request retornasse o
+  // tenant errado.
+  const kv = !tenantOverride ? getTenantKV() : null;
   const tenantCacheKey = kv ? `tenant:${session.user.id}` : null;
   if (kv && tenantCacheKey) {
     try {
@@ -106,29 +110,82 @@ export async function getTenantContext(
     } catch { /* cache miss */ }
   }
 
-  const tenantOverride = headers.get("x-tenant-id");
-
-  // Override só vale se o user tem role 'superadmin' em ALGUM tenant
-  // (tipicamente o GH platform owner). Sem essa checagem, qualquer user
-  // autenticado pode forjar X-Tenant-Id e operar em tenants alheios desde
-  // que algum row em user_tenant case (ex.: convidado num tenant secundário).
-  let allowOverride = false;
+  // ── Override path ──────────────────────────────────────────────────────
+  // Quem pode trocar de tenant via X-Tenant-Id:
+  // - superadmin: qualquer tenant (suporte cross-tenant)
+  // - partner_admin: somente sub-clientes onde tenant.partnerId == seu home tenant
+  //
+  // Nenhum dos dois precisa ter row em user_tenant pro tenant alvo —
+  // a autorização vem do papel + (no caso do parceiro) da relação partnerId.
   if (tenantOverride) {
-    const [supercheck] = await db
-      .select({ id: userTenant.id })
+    const elevatedRows = await db
+      .select({ tenantId: userTenant.tenantId, role: userTenant.role })
       .from(userTenant)
       .where(
         and(
           eq(userTenant.userId, session.user.id),
-          eq(userTenant.role, "superadmin")
+          inArray(userTenant.role, ["superadmin", "partner_admin"])
         )
-      )
-      .limit(1);
-    allowOverride = Boolean(supercheck);
+      );
+
+    const isSuperadmin = elevatedRows.some((r) => r.role === "superadmin");
+    const partnerHomeTenantId =
+      elevatedRows.find((r) => r.role === "partner_admin")?.tenantId ?? null;
+
+    if (isSuperadmin) {
+      const [t] = await db
+        .select({
+          id: tenant.id,
+          slug: tenant.slug,
+          isPlatformOwner: tenant.isPlatformOwner,
+        })
+        .from(tenant)
+        .where(eq(tenant.id, tenantOverride))
+        .limit(1);
+
+      if (t) {
+        return {
+          tenantId: t.id,
+          tenantSlug: t.slug,
+          isPlatformOwner: t.isPlatformOwner,
+          role: "superadmin",
+          userId: session.user.id,
+        };
+      }
+    }
+
+    if (partnerHomeTenantId) {
+      const [t] = await db
+        .select({
+          id: tenant.id,
+          slug: tenant.slug,
+          isPlatformOwner: tenant.isPlatformOwner,
+        })
+        .from(tenant)
+        .where(
+          and(
+            eq(tenant.id, tenantOverride),
+            eq(tenant.partnerId, partnerHomeTenantId)
+          )
+        )
+        .limit(1);
+
+      if (t) {
+        return {
+          tenantId: t.id,
+          tenantSlug: t.slug,
+          isPlatformOwner: t.isPlatformOwner,
+          role: "partner_admin",
+          userId: session.user.id,
+        };
+      }
+    }
+
+    // Override pedido mas não autorizado / tenant inexistente.
+    // Cai no lookup default abaixo (em vez de retornar 403 silencioso).
   }
 
-  const useOverride = tenantOverride && allowOverride;
-
+  // ── Default path ───────────────────────────────────────────────────────
   const [row] = await db
     .select({
       tenantId: tenant.id,
@@ -139,15 +196,10 @@ export async function getTenantContext(
     .from(userTenant)
     .innerJoin(tenant, eq(userTenant.tenantId, tenant.id))
     .where(
-      useOverride
-        ? and(
-            eq(userTenant.userId, session.user.id),
-            eq(tenant.id, tenantOverride!)
-          )
-        : and(
-            eq(userTenant.userId, session.user.id),
-            eq(userTenant.isDefault, true)
-          )
+      and(
+        eq(userTenant.userId, session.user.id),
+        eq(userTenant.isDefault, true)
+      )
     )
     .limit(1);
 
@@ -164,7 +216,6 @@ export async function getTenantContext(
     userId: session.user.id,
   };
 
-  // Salva no KV pra próximas requests (30s TTL)
   if (kv && tenantCacheKey) {
     try {
       await kv.put(tenantCacheKey, JSON.stringify(ctx), { expirationTtl: 30 });
