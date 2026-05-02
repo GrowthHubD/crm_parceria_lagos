@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Loader2, CheckCircle2, XCircle, Phone, QrCode } from "lucide-react";
+import { Plus, Loader2, CheckCircle2, Phone, QrCode } from "lucide-react";
 
 export interface PartnerClient {
   id: string;
@@ -29,10 +29,14 @@ export function PartnerClientsManager({ initialClients }: Props) {
   const [qrClientId, setQrClientId] = useState<string | null>(null);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [qrLoading, setQrLoading] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
+  const [qrConnected, setQrConnected] = useState(false);
 
   async function handleConnectWhatsapp(clientId: string) {
     setQrClientId(clientId);
     setQrCode(null);
+    setQrError(null);
+    setQrConnected(false);
     setQrLoading(true);
     try {
       const res = await fetch("/api/uazapi/connect", {
@@ -41,18 +45,51 @@ export function PartnerClientsManager({ initialClients }: Props) {
         body: JSON.stringify({ tenantId: clientId }),
       });
       const data = await res.json();
-      if (data.status === "connected") {
-        setQrClientId(null);
-        router.refresh();
+      if (!res.ok) {
+        setQrError(data.error ?? "Falha ao gerar QR");
+      } else if (data.status === "connected") {
+        setQrConnected(true);
+        setTimeout(() => {
+          setQrClientId(null);
+          router.refresh();
+        }, 1500);
       } else if (data.qrCode) {
         setQrCode(data.qrCode);
+      } else {
+        setQrError("Provider devolveu resposta vazia");
       }
-    } catch {
-      setQrClientId(null);
+    } catch (e) {
+      setQrError(e instanceof Error ? e.message : "Falha de rede");
     } finally {
       setQrLoading(false);
     }
   }
+
+  // Poll status enquanto QR está aberto + ainda não conectou
+  useEffect(() => {
+    if (!qrClientId || qrConnected || !qrCode) return;
+    const tenantId = qrClientId;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/uazapi/status?tenantId=${tenantId}`, {
+          headers: { "x-tenant-id": tenantId },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === "connected") {
+          setQrConnected(true);
+          clearInterval(interval);
+          setTimeout(() => {
+            setQrClientId(null);
+            router.refresh();
+          }, 1500);
+        }
+      } catch {
+        /* silent */
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [qrClientId, qrConnected, qrCode, router]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -425,38 +462,60 @@ export function PartnerClientsManager({ initialClients }: Props) {
           >
             <h3 className="font-semibold mb-2">Conectar WhatsApp</h3>
             <p className="text-small text-muted mb-4">
-              Escaneie o QR code com o WhatsApp do cliente
+              {qrConnected
+                ? "Conectado com sucesso!"
+                : qrCode
+                ? "Escaneie o QR code com o WhatsApp do cliente"
+                : qrError
+                ? "Erro ao gerar QR"
+                : "Gerando QR code..."}
             </p>
 
             <div className="bg-white p-4 rounded-lg mb-4 min-h-[280px] flex items-center justify-center">
-              {qrLoading && !qrCode && <Loader2 className="w-8 h-8 animate-spin text-muted" />}
-              {qrCode && (
+              {qrConnected ? (
+                <div className="flex flex-col items-center gap-2 text-success">
+                  <CheckCircle2 className="w-16 h-16" />
+                  <p className="text-sm font-medium">WhatsApp conectado!</p>
+                </div>
+              ) : qrLoading && !qrCode ? (
+                <Loader2 className="w-8 h-8 animate-spin text-muted" />
+              ) : qrCode ? (
                 <img
                   src={qrCode.startsWith("data:") ? qrCode : `data:image/png;base64,${qrCode}`}
                   alt="QR Code"
                   className="max-w-full"
                 />
-              )}
-              {!qrLoading && !qrCode && (
+              ) : qrError ? (
+                <p className="text-small text-error px-2">{qrError}</p>
+              ) : (
                 <p className="text-small text-muted">Falha ao gerar QR</p>
               )}
             </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={() => handleConnectWhatsapp(qrClientId)}
-                disabled={qrLoading}
-                className="flex-1 px-3 py-2 bg-surface-2 rounded-lg text-sm hover:bg-surface-2/70 disabled:opacity-50"
-              >
-                Atualizar QR
-              </button>
-              <button
-                onClick={() => setQrClientId(null)}
-                className="flex-1 px-3 py-2 text-muted hover:text-foreground text-sm"
-              >
-                Fechar
-              </button>
-            </div>
+            {qrCode && !qrConnected && !qrError && (
+              <div className="flex items-center justify-center gap-2 text-xs text-muted mb-3">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Aguardando você escanear...
+              </div>
+            )}
+
+            {!qrConnected && (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleConnectWhatsapp(qrClientId)}
+                  disabled={qrLoading}
+                  className="flex-1 px-3 py-2 bg-surface-2 rounded-lg text-sm hover:bg-surface-2/70 disabled:opacity-50"
+                >
+                  {qrError ? "Tentar de novo" : "Atualizar QR"}
+                </button>
+                <button
+                  onClick={() => setQrClientId(null)}
+                  className="flex-1 px-3 py-2 text-muted hover:text-foreground text-sm"
+                >
+                  Fechar
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -74,22 +74,45 @@ export async function POST(request: NextRequest) {
     }
 
     const effectiveInstanceId = savedInstanceId ?? instanceIdFromSlug(tenantData.slug);
+    const existingToken = wNum?.uazapiToken && wNum.uazapiToken !== "baileys" ? wNum.uazapiToken : "";
 
-    // ── 2) Criar instância se necessário
-    const createResult = await createInstance(effectiveInstanceId, webhookUrl);
-    if (!createResult.ok) {
-      console.error("[WHATSAPP] createInstance failed for tenant", targetTenantId, "—", createResult.error);
-      const detail = createResult.error ?? "unknown";
-      const isAuth = /401|403|admintoken|unauthorized/i.test(detail);
-      const isNetwork = /fetch failed|ENOTFOUND|ECONNREFUSED|timeout/i.test(detail);
-      const userMsg = isAuth
-        ? "Provider WhatsApp recusou autenticação (verifique UAZAPI_ADMIN_TOKEN)"
-        : isNetwork
-        ? "Provider WhatsApp inacessível (verifique UAZAPI_BASE_URL e conectividade)"
-        : `Falha ao criar instância: ${detail.slice(0, 200)}`;
-      return NextResponse.json({ error: userMsg, step: "createInstance" }, { status: 502 });
+    // ── 2) Criar instância — APENAS se nunca foi criada antes.
+    // Se já temos savedInstanceId + token, pulamos create e vamos direto pro QR.
+    // Isso evita estourar o cap de instâncias do Uazapi (429) quando o tenant
+    // só quer reabrir o QR de uma instância que já existe.
+    let instanceToken = existingToken;
+    const needsCreate = !savedInstanceId || !existingToken;
+
+    if (needsCreate) {
+      const createResult = await createInstance(effectiveInstanceId, webhookUrl);
+      if (!createResult.ok) {
+        console.error("[WHATSAPP] createInstance failed for tenant", targetTenantId, "—", createResult.error);
+        const detail = createResult.error ?? "unknown";
+        const isAuth = /401|403|admintoken|unauthorized/i.test(detail);
+        const isNetwork = /fetch failed|ENOTFOUND|ECONNREFUSED|timeout/i.test(detail);
+        const isCapReached = /429|maximum number|limit/i.test(detail);
+
+        // Caso especial: cap atingido MAS já temos a instância no banco —
+        // tenta reusar mesmo sem criar (Uazapi conta tentativa contra cap).
+        if (isCapReached && savedInstanceId && existingToken) {
+          console.warn("[WHATSAPP] cap atingido mas instância já existe — reusando", savedInstanceId);
+          // segue pro setWebhook + getQrCode com o token existente
+        } else {
+          const userMsg = isAuth
+            ? "Provider WhatsApp recusou autenticação (verifique UAZAPI_ADMIN_TOKEN)"
+            : isNetwork
+            ? "Provider WhatsApp inacessível (verifique UAZAPI_BASE_URL e conectividade)"
+            : isCapReached
+            ? "Limite de instâncias do Uazapi atingido. Apague instâncias não usadas em https://williphone.uazapi.com ou aumente o plano."
+            : `Falha ao criar instância: ${detail.slice(0, 200)}`;
+          return NextResponse.json({ error: userMsg, step: "createInstance" }, { status: 502 });
+        }
+      } else {
+        instanceToken = createResult.token ?? existingToken;
+      }
+    } else {
+      console.info("[WHATSAPP] reusando instância existente", savedInstanceId, "(skip createInstance)");
     }
-    const instanceToken = createResult.token ?? wNum?.uazapiToken ?? "";
 
     // ── 3) Upsert no banco
     if (!wNum) {
@@ -109,12 +132,13 @@ export async function POST(request: NextRequest) {
         .update(tenant)
         .set({ uazapiInstanceId: wNum.id, updatedAt: new Date() })
         .where(eq(tenant.id, targetTenantId));
-    } else {
+    } else if (instanceToken && instanceToken !== existingToken) {
+      // Só atualiza no banco se realmente houve novo token vindo do create
       await db
         .update(whatsappNumber)
         .set({
           uazapiSession: effectiveInstanceId,
-          ...(instanceToken ? { uazapiToken: instanceToken } : {}),
+          uazapiToken: instanceToken,
         })
         .where(eq(whatsappNumber.id, wNum.id));
     }
