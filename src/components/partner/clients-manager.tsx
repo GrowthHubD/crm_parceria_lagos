@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Loader2, CheckCircle2, Phone, QrCode } from "lucide-react";
+import { Plus, Loader2, CheckCircle2, Phone, QrCode, KeyRound, Link2, Copy, ChevronDown } from "lucide-react";
 
 export interface PartnerClient {
   id: string;
@@ -15,6 +15,15 @@ export interface PartnerClient {
   createdAt: string;
   whatsappActive: boolean | null;
   whatsappPhone: string | null;
+  adminEmail: string | null;
+  adminName: string | null;
+}
+
+interface AccessState {
+  loading: "magic-link" | "reset-password" | null;
+  magicLink?: string;
+  newPassword?: string;
+  error?: string;
 }
 
 interface Props {
@@ -92,6 +101,63 @@ export function PartnerClientsManager({ initialClients }: Props) {
   }, [qrClientId, qrConnected, qrCode, router]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandedClient, setExpandedClient] = useState<string | null>(null);
+  const [accessState, setAccessState] = useState<Record<string, AccessState>>({});
+
+  function toggleExpanded(clientId: string) {
+    setExpandedClient((cur) => (cur === clientId ? null : clientId));
+  }
+
+  async function handleAccessAction(
+    clientId: string,
+    action: "magic-link" | "reset-password",
+    newPassword?: string
+  ) {
+    setAccessState((s) => ({
+      ...s,
+      [clientId]: { ...s[clientId], loading: action, error: undefined },
+    }));
+    try {
+      const res = await fetch(`/api/partner/clients/${clientId}/access`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...(newPassword ? { newPassword } : {}) }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAccessState((s) => ({
+          ...s,
+          [clientId]: { loading: null, error: data.error ?? "Falha" },
+        }));
+        return;
+      }
+      setAccessState((s) => ({
+        ...s,
+        [clientId]: {
+          loading: null,
+          magicLink: data.magicLink ?? s[clientId]?.magicLink,
+          newPassword: data.newPassword ?? s[clientId]?.newPassword,
+        },
+      }));
+    } catch (e) {
+      setAccessState((s) => ({
+        ...s,
+        [clientId]: {
+          loading: null,
+          error: e instanceof Error ? e.message : "Falha de rede",
+        },
+      }));
+    }
+  }
+
+  function generateRandomPassword() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+    let out = "";
+    for (let i = 0; i < 12; i++) {
+      out += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return out;
+  }
 
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
@@ -406,47 +472,172 @@ export function PartnerClientsManager({ initialClients }: Props) {
         </div>
       ) : (
         <div className="grid gap-3">
-          {clients.map((c) => (
-            <div
-              key={c.id}
-              className="bg-surface border border-border rounded-xl p-4 flex items-center justify-between hover:border-primary/40 transition"
-            >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <h3 className="font-medium text-foreground truncate">{c.name}</h3>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-muted">
-                    {c.plan}
-                  </span>
-                  {c.status !== "active" && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning">
-                      {c.status}
-                    </span>
-                  )}
-                </div>
-                <p className="text-small text-muted mt-0.5 font-mono">{c.slug}</p>
-              </div>
-
-              <div className="flex items-center gap-4 shrink-0">
-                <div className="text-right">
-                  {c.whatsappActive ? (
-                    <div className="flex items-center gap-1 text-small text-success">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <Phone className="w-3.5 h-3.5" />
-                      <span>{c.whatsappPhone}</span>
+          {clients.map((c) => {
+            const isExpanded = expandedClient === c.id;
+            const access = accessState[c.id];
+            return (
+              <div
+                key={c.id}
+                className="bg-surface border border-border rounded-xl hover:border-primary/40 transition"
+              >
+                <div className="p-4 flex items-center justify-between">
+                  <button
+                    onClick={() => toggleExpanded(c.id)}
+                    className="flex-1 min-w-0 text-left"
+                  >
+                    <div className="flex items-center gap-2">
+                      <ChevronDown
+                        className={`w-4 h-4 text-muted transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                      />
+                      <h3 className="font-medium text-foreground truncate">{c.name}</h3>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-muted">
+                        {c.plan}
+                      </span>
+                      {c.status !== "active" && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning">
+                          {c.status}
+                        </span>
+                      )}
                     </div>
-                  ) : (
-                    <button
-                      onClick={() => handleConnectWhatsapp(c.id)}
-                      className="flex items-center gap-1.5 text-small text-primary hover:underline"
-                    >
-                      <QrCode className="w-3.5 h-3.5" />
-                      Conectar WhatsApp
-                    </button>
-                  )}
+                    <p className="text-small text-muted mt-0.5 font-mono ml-6">{c.slug}</p>
+                  </button>
+
+                  <div className="flex items-center gap-4 shrink-0">
+                    <div className="text-right">
+                      {c.whatsappActive ? (
+                        <div className="flex items-center gap-1 text-small text-success">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <Phone className="w-3.5 h-3.5" />
+                          <span>{c.whatsappPhone}</span>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handleConnectWhatsapp(c.id)}
+                          className="flex items-center gap-1.5 text-small text-primary hover:underline"
+                        >
+                          <QrCode className="w-3.5 h-3.5" />
+                          Conectar WhatsApp
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
+
+                {isExpanded && (
+                  <div className="border-t border-border px-4 py-3 space-y-3 bg-surface-2/30">
+                    <div>
+                      <p className="text-xs text-muted/70 mb-1">Email do admin</p>
+                      {c.adminEmail ? (
+                        <div className="flex items-center gap-2 bg-surface-2 rounded-lg p-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={c.adminEmail}
+                            className="flex-1 bg-transparent text-xs font-mono outline-none"
+                          />
+                          <button
+                            onClick={() => navigator.clipboard.writeText(c.adminEmail!)}
+                            className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:opacity-90 flex items-center gap-1"
+                          >
+                            <Copy className="w-3 h-3" />
+                            Copiar
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="text-small text-muted italic">
+                          Sem admin associado — cliente provavelmente foi criado sem email.
+                        </p>
+                      )}
+                    </div>
+
+                    {c.adminEmail && (
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => handleAccessAction(c.id, "magic-link")}
+                          disabled={access?.loading === "magic-link"}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 hover:bg-surface-2/70 rounded-lg text-xs disabled:opacity-50"
+                        >
+                          {access?.loading === "magic-link" ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Link2 className="w-3 h-3" />
+                          )}
+                          Gerar magic link
+                        </button>
+                        <button
+                          onClick={() => {
+                            const pwd = generateRandomPassword();
+                            if (
+                              confirm(
+                                `Resetar senha de ${c.adminEmail}?\nNova senha: ${pwd}\n\nA senha atual deixará de funcionar.`
+                              )
+                            ) {
+                              handleAccessAction(c.id, "reset-password", pwd);
+                            }
+                          }}
+                          disabled={access?.loading === "reset-password"}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 hover:bg-surface-2/70 rounded-lg text-xs disabled:opacity-50"
+                        >
+                          {access?.loading === "reset-password" ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <KeyRound className="w-3 h-3" />
+                          )}
+                          Resetar senha
+                        </button>
+                      </div>
+                    )}
+
+                    {access?.error && (
+                      <p className="text-xs text-destructive">{access.error}</p>
+                    )}
+
+                    {access?.newPassword && (
+                      <div>
+                        <p className="text-xs text-muted/70 mb-1">Nova senha (anote agora — não fica salva)</p>
+                        <div className="flex items-center gap-2 bg-surface-2 rounded-lg p-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={access.newPassword}
+                            className="flex-1 bg-transparent text-xs font-mono outline-none"
+                          />
+                          <button
+                            onClick={() => navigator.clipboard.writeText(access.newPassword!)}
+                            className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:opacity-90 flex items-center gap-1"
+                          >
+                            <Copy className="w-3 h-3" />
+                            Copiar
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {access?.magicLink && (
+                      <div>
+                        <p className="text-xs text-muted/70 mb-1">Magic link (válido por tempo limitado)</p>
+                        <div className="flex items-center gap-2 bg-surface-2 rounded-lg p-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={access.magicLink}
+                            className="flex-1 bg-transparent text-xs font-mono outline-none"
+                          />
+                          <button
+                            onClick={() => navigator.clipboard.writeText(access.magicLink!)}
+                            className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:opacity-90 flex items-center gap-1"
+                          >
+                            <Copy className="w-3 h-3" />
+                            Copiar
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

@@ -5,7 +5,8 @@ import { getTenantContext } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { tenant } from "@/lib/db/schema/tenants";
 import { whatsappNumber } from "@/lib/db/schema/crm";
-import { eq, desc } from "drizzle-orm";
+import { user, userTenant } from "@/lib/db/schema/users";
+import { eq, desc, and } from "drizzle-orm";
 import { PartnerClientsManager } from "@/components/partner/clients-manager";
 
 export const metadata: Metadata = { title: "Meus Clientes" };
@@ -38,14 +39,30 @@ export default async function PartnerPage() {
       createdAt: tenant.createdAt,
       whatsappActive: whatsappNumber.isActive,
       whatsappPhone: whatsappNumber.phoneNumber,
+      adminEmail: user.email,
+      adminName: user.name,
     })
     .from(tenant)
     .leftJoin(whatsappNumber, eq(whatsappNumber.tenantId, tenant.id))
+    .leftJoin(
+      userTenant,
+      and(eq(userTenant.tenantId, tenant.id), eq(userTenant.role, "admin"))
+    )
+    .leftJoin(user, eq(user.id, userTenant.userId))
     .orderBy(desc(tenant.createdAt));
 
-  const clients = whereClause
+  const clientsRaw = whereClause
     ? await baseQuery.where(whereClause)
     : await baseQuery;
+
+  // Dedup: o join com userTenant pode multiplicar linhas se houver mais de
+  // um admin por tenant. Pega o primeiro admin de cada tenant.
+  const seen = new Set<string>();
+  const clients = clientsRaw.filter((c) => {
+    if (seen.has(c.id)) return false;
+    seen.add(c.id);
+    return true;
+  });
 
   const serialized = clients.map((c) => ({
     ...c,
