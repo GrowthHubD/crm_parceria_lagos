@@ -25,6 +25,7 @@ export default function DashboardLayout({
 }) {
   const { data: session, isPending } = useSession();
   const router = useRouter();
+  const [loadError, setLoadError] = useState<string | null>(null);
   // Inicializa do sessionStorage em renderização lazy — evita flash de "Carregando..."
   // ao trocar de aba (next.js client-side nav re-mount pode acontecer em alguns casos).
   const [tenantCtx, setTenantCtx] = useState<TenantContext | null>(() => {
@@ -68,8 +69,13 @@ export default function DashboardLayout({
     }
 
     fetch("/api/tenant/context")
-      .then((res) => {
-        if (!res.ok) throw new Error("NO_TENANT");
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          const err = new Error(body?.error ?? `HTTP ${res.status}`);
+          (err as Error & { status?: number }).status = res.status;
+          throw err;
+        }
         return res.json();
       })
       .then((ctx) => {
@@ -78,10 +84,40 @@ export default function DashboardLayout({
         }
         setTenantCtx(ctx);
       })
-      .catch(() => {
-        if (!isDev) router.push("/login");
+      .catch((err: Error & { status?: number }) => {
+        // 401 = não autenticado → /login. Outros erros → mostra mensagem.
+        if (err.status === 401) {
+          if (!isDev) router.push("/login");
+        } else {
+          setLoadError(err.message ?? "Erro desconhecido");
+        }
       });
   }, [session, router]);
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-6">
+        <div className="bg-surface border border-border rounded-xl p-6 max-w-md w-full space-y-3">
+          <h2 className="font-semibold text-foreground">Erro ao carregar contexto</h2>
+          <p className="text-small text-muted">
+            Login OK, mas o backend rejeitou: <span className="font-mono text-error">{loadError}</span>
+          </p>
+          <p className="text-xs text-muted/70">
+            Manda esse código pro suporte/dev pra investigar.
+          </p>
+          <button
+            onClick={() => {
+              try { sessionStorage.clear(); } catch { /* ignore */ }
+              router.push("/login");
+            }}
+            className="px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-sm"
+          >
+            Voltar pro login
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if ((isPending && !isDev) || !tenantCtx) {
     return (

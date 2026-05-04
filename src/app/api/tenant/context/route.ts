@@ -19,6 +19,8 @@ import type { UserRole } from "@/types";
 export async function GET(_request: NextRequest) {
   // 1) Auth via cliente SSR (usa o JWT do cookie do user)
   let userId: string;
+  let authEmail: string | null = null;
+  let authName: string | null = null;
   try {
     const supabase = await createSupabaseServer();
     const { data, error } = await supabase.auth.getUser();
@@ -26,6 +28,8 @@ export async function GET(_request: NextRequest) {
       return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401 });
     }
     userId = data.user.id;
+    authEmail = data.user.email ?? null;
+    authName = (data.user.user_metadata?.name as string | undefined) ?? null;
   } catch (e: unknown) {
     return NextResponse.json(
       { error: "AUTH_ERROR", debugMessage: e instanceof Error ? e.message : String(e) },
@@ -36,7 +40,7 @@ export async function GET(_request: NextRequest) {
   // 2) Lookups subsequentes via service_role (bypass RLS — o user já tá autenticado)
   const admin = getSupabaseAdmin();
 
-  const { data: userRowRaw, error: userErr } = await admin
+  let { data: userRowRaw, error: userErr } = await admin
     .from("user")
     .select("id, name, image")
     .eq("id", userId)
@@ -48,15 +52,40 @@ export async function GET(_request: NextRequest) {
       { status: 500 }
     );
   }
+
+  // Self-heal: user autenticado em Supabase Auth mas sem linha em public.user
+  // (provisioning antigo silenciava esse erro). Cria automaticamente.
+  if (!userRowRaw && authEmail) {
+    const { data: created, error: createErr } = await admin
+      .from("user")
+      .insert({
+        id: userId,
+        name: authName ?? authEmail,
+        email: authEmail,
+        emailVerified: true,
+        role: "admin",
+        isActive: true,
+      })
+      .select("id, name, image")
+      .single();
+    if (createErr) {
+      return NextResponse.json(
+        { error: "USER_BACKFILL_FAILED", debugMessage: createErr.message },
+        { status: 500 }
+      );
+    }
+    userRowRaw = created;
+  }
   if (!userRowRaw) {
     return NextResponse.json({ error: "USER_NOT_FOUND" }, { status: 404 });
   }
   const userRow = userRowRaw as { id: string; name: string; image: string | null };
 
-  // 3) Lookup tenant binding (default) com embedded join PostgREST
-  const { data: utRowRaw, error: utErr } = await admin
+  // 3) Lookup tenant binding — primeiro tenta o default, senão pega QUALQUER vínculo
+  // (self-heal pra users criados via partner panel sem is_default=true)
+  let { data: utRowRaw, error: utErr } = await admin
     .from("user_tenant")
-    .select("role, tenant:tenant_id(id, slug, is_platform_owner)")
+    .select("role, is_default, tenant:tenant_id(id, slug, is_platform_owner)")
     .eq("user_id", userId)
     .eq("is_default", true)
     .maybeSingle();
@@ -69,11 +98,37 @@ export async function GET(_request: NextRequest) {
   }
 
   if (!utRowRaw) {
-    return NextResponse.json({ error: "NO_TENANT_ACCESS" }, { status: 403 });
+    // Fallback: qualquer user_tenant pra esse user (mais recente primeiro)
+    const { data: anyRows, error: anyErr } = await admin
+      .from("user_tenant")
+      .select("id, role, tenant:tenant_id(id, slug, is_platform_owner)")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (anyErr) {
+      return NextResponse.json(
+        { error: "TENANT_LOOKUP_ERROR", debugMessage: anyErr.message },
+        { status: 500 }
+      );
+    }
+
+    const first = anyRows?.[0] as
+      | { id: string; role: string; tenant: { id: string; slug: string; is_platform_owner: boolean } | null }
+      | undefined;
+
+    if (!first) {
+      return NextResponse.json({ error: "NO_TENANT_ACCESS" }, { status: 403 });
+    }
+
+    // Promove pra default (idempotente — próximas requests pegam o caminho rápido)
+    await admin.from("user_tenant").update({ is_default: true }).eq("id", first.id);
+    utRowRaw = { role: first.role, is_default: true, tenant: first.tenant };
   }
 
   const utRow = utRowRaw as {
     role: string;
+    is_default: boolean;
     tenant: { id: string; slug: string; is_platform_owner: boolean } | null;
   };
 
