@@ -72,7 +72,9 @@ export default function DashboardLayout({
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          const err = new Error(body?.error ?? `HTTP ${res.status}`);
+          const code = body?.error ?? `HTTP ${res.status}`;
+          const detail = body?.debugMessage ? ` — ${body.debugMessage}` : "";
+          const err = new Error(`${code}${detail}`);
           (err as Error & { status?: number }).status = res.status;
           throw err;
         }
