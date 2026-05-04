@@ -161,75 +161,84 @@ export async function provisionClient(
   let passwordSet = false;
 
   if (input.adminEmail) {
-    try {
-      const supa = getSupabaseAdmin();
+    const supa = getSupabaseAdmin();
 
-      // Checa se já existe
-      const { data: listData } = await supa.auth.admin.listUsers();
-      const existing = listData?.users?.find((u) => u.email === input.adminEmail);
+    // 7.1) Resolve user no Supabase Auth (cria ou recupera + reseta senha se vier)
+    const { data: listData } = await supa.auth.admin.listUsers();
+    const existing = listData?.users?.find((u) => u.email === input.adminEmail);
 
-      if (existing) {
-        adminUserId = existing.id;
-        // User pré-existente: NÃO sobrescreve senha silenciosamente.
-        if (input.adminPassword) {
-          warnings.push("Usuário já existia — senha NÃO foi alterada. Use 'esqueci a senha' se necessário.");
-        }
-      } else {
-        const { data: createData, error: createError } = await supa.auth.admin.createUser({
-          email: input.adminEmail,
-          email_confirm: true,
-          user_metadata: { name: input.adminName ?? input.name },
-          ...(input.adminPassword ? { password: input.adminPassword } : {}),
+    if (existing) {
+      adminUserId = existing.id;
+      if (input.adminPassword) {
+        const { error: updateError } = await supa.auth.admin.updateUserById(existing.id, {
+          password: input.adminPassword,
         });
-        if (createError || !createData.user) {
-          warnings.push(`Falha ao criar admin: ${createError?.message ?? "unknown"}`);
-        } else {
-          adminUserId = createData.user.id;
-          passwordSet = !!input.adminPassword;
+        if (updateError) {
+          throw new Error(`Falha ao atualizar senha do admin existente: ${updateError.message}`);
         }
+        passwordSet = true;
       }
-
-      if (adminUserId) {
-        // Espelha em public.user
-        await db
-          .insert(user)
-          .values({
-            id: adminUserId,
-            name: input.adminName ?? input.name,
-            email: input.adminEmail,
-            emailVerified: true,
-            role: "admin",
-            isActive: true,
-          })
-          .onConflictDoNothing();
-
-        // Vincula ao tenant como admin
-        await db
-          .insert(userTenant)
-          .values({
-            userId: adminUserId,
-            tenantId: newTenant.id,
-            role: "admin",
-            isDefault: true,
-          })
-          .onConflictDoNothing();
-
-        // Gera magic link (redireciona pra /onboarding/whatsapp após login)
-        const redirect = `${process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/onboarding/whatsapp`;
-        const { data: linkData, error: linkError } = await supa.auth.admin.generateLink({
-          type: "magiclink",
-          email: input.adminEmail,
-          options: { redirectTo: redirect },
-        });
-        if (linkError) {
-          warnings.push(`Falha ao gerar magic link: ${linkError.message}`);
-        } else {
-          // @ts-expect-error - action_link existe no retorno mas TS não reconhece
-          magicLink = linkData?.properties?.action_link ?? linkData?.action_link;
-        }
+    } else {
+      const { data: createData, error: createError } = await supa.auth.admin.createUser({
+        email: input.adminEmail,
+        email_confirm: true,
+        user_metadata: { name: input.adminName ?? input.name },
+        ...(input.adminPassword ? { password: input.adminPassword } : {}),
+      });
+      if (createError || !createData.user) {
+        throw new Error(`Falha ao criar admin no Supabase: ${createError?.message ?? "unknown"}`);
       }
-    } catch (e) {
-      warnings.push(`Erro no setup do admin: ${e instanceof Error ? e.message : "unknown"}`);
+      adminUserId = createData.user.id;
+      passwordSet = !!input.adminPassword;
+    }
+
+    // 7.2) Espelha em public.user — detecta collision de email com outro id
+    const [byEmail] = await db
+      .select({ id: user.id })
+      .from(user)
+      .where(eq(user.email, input.adminEmail))
+      .limit(1);
+
+    if (byEmail && byEmail.id !== adminUserId) {
+      throw new Error(
+        `Email ${input.adminEmail} já está vinculado a outro usuário (id=${byEmail.id}). Use email diferente.`
+      );
+    }
+
+    if (!byEmail) {
+      await db.insert(user).values({
+        id: adminUserId,
+        name: input.adminName ?? input.name,
+        email: input.adminEmail,
+        emailVerified: true,
+        role: "admin",
+        isActive: true,
+      });
+    }
+
+    // 7.3) Vincula ao tenant como admin (idempotente)
+    await db
+      .insert(userTenant)
+      .values({
+        userId: adminUserId,
+        tenantId: newTenant.id,
+        role: "admin",
+        isDefault: true,
+      })
+      .onConflictDoNothing();
+
+    // 7.4) Magic link (redireciona pra /onboarding/whatsapp após login)
+    const redirect = `${process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/onboarding/whatsapp`;
+    const { data: linkData, error: linkError } = await supa.auth.admin.generateLink({
+      type: "magiclink",
+      email: input.adminEmail,
+      options: { redirectTo: redirect },
+    });
+    if (linkError) {
+      warnings.push(`Magic link não gerado: ${linkError.message}`);
+    } else {
+      // @ts-expect-error - action_link existe no retorno mas TS não reconhece
+      magicLink = linkData?.properties?.action_link ?? linkData?.action_link;
     }
   }
 
