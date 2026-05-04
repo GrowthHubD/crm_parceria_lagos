@@ -81,14 +81,15 @@ export async function GET(_request: NextRequest) {
   }
   const userRow = userRowRaw as { id: string; name: string; image: string | null };
 
-  // 3) Lookup tenant binding — primeiro tenta o default, senão pega QUALQUER vínculo
-  // (self-heal pra users criados via partner panel sem is_default=true)
-  let { data: utRowRaw, error: utErr } = await admin
+  // 3) Lookup tenant binding — pega TODOS os vínculos e escolhe o melhor
+  // (default primeiro, depois mais recente). Tolera duplicatas de is_default=true
+  // que aconteciam em provisioning antigo rodado múltiplas vezes pro mesmo user.
+  const { data: utRows, error: utErr } = await admin
     .from("user_tenant")
-    .select("role, is_default, tenant:tenant_id(id, slug, is_platform_owner)")
+    .select("id, role, is_default, created_at, tenant:tenant_id(id, slug, is_platform_owner)")
     .eq("user_id", userId)
-    .eq("is_default", true)
-    .maybeSingle();
+    .order("is_default", { ascending: false })
+    .order("created_at", { ascending: false });
 
   if (utErr) {
     return NextResponse.json(
@@ -97,44 +98,41 @@ export async function GET(_request: NextRequest) {
     );
   }
 
-  if (!utRowRaw) {
-    // Fallback: qualquer user_tenant pra esse user (mais recente primeiro)
-    const { data: anyRows, error: anyErr } = await admin
-      .from("user_tenant")
-      .select("id, role, tenant:tenant_id(id, slug, is_platform_owner)")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    if (anyErr) {
-      return NextResponse.json(
-        { error: "TENANT_LOOKUP_ERROR", debugMessage: anyErr.message },
-        { status: 500 }
-      );
-    }
-
-    const first = anyRows?.[0] as
-      | { id: string; role: string; tenant: { id: string; slug: string; is_platform_owner: boolean } | null }
-      | undefined;
-
-    if (!first) {
-      return NextResponse.json({ error: "NO_TENANT_ACCESS" }, { status: 403 });
-    }
-
-    // Promove pra default (idempotente — próximas requests pegam o caminho rápido)
-    await admin.from("user_tenant").update({ is_default: true }).eq("id", first.id);
-    utRowRaw = { role: first.role, is_default: true, tenant: first.tenant };
-  }
-
-  const utRow = utRowRaw as {
+  type UtRow = {
+    id: string;
     role: string;
     is_default: boolean;
+    created_at: string;
     tenant: { id: string; slug: string; is_platform_owner: boolean } | null;
   };
 
-  if (!utRow.tenant) {
+  const rows = (utRows ?? []) as UtRow[];
+  const chosen = rows.find((r) => r.tenant !== null);
+
+  if (!chosen || !chosen.tenant) {
     return NextResponse.json({ error: "NO_TENANT_ACCESS" }, { status: 403 });
   }
+
+  // Self-heal: se houver múltiplos is_default=true OU o escolhido não é default,
+  // normaliza pra ter exatamente 1 default (o escolhido) — evita o erro
+  // "multiple rows returned" em queries .maybeSingle() futuras.
+  const defaults = rows.filter((r) => r.is_default);
+  const needsNormalize = defaults.length !== 1 || defaults[0]?.id !== chosen.id;
+  if (needsNormalize) {
+    await admin
+      .from("user_tenant")
+      .update({ is_default: false })
+      .eq("user_id", userId);
+    await admin
+      .from("user_tenant")
+      .update({ is_default: true })
+      .eq("id", chosen.id);
+  }
+
+  const utRow = {
+    role: chosen.role,
+    tenant: chosen.tenant,
+  };
 
   const t = utRow.tenant;
   const role = utRow.role as UserRole;
