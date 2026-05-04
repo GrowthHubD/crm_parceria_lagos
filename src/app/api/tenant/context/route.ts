@@ -107,14 +107,35 @@ export async function GET(_request: NextRequest) {
   };
 
   const rows = (utRows ?? []) as UtRow[];
-  const chosen = rows.find((r) => r.tenant !== null);
+  const validRows = rows.filter((r) => r.tenant !== null);
+
+  // Lógica determinística de seleção:
+  //  1. Se tem exatamente 1 row com is_default=true E tenant válido → usa ele
+  //  2. Se user é superadmin/partner_admin com vários vínculos → prefere
+  //     is_platform_owner=true (tenant GH) ou is_partner indireto (não temos
+  //     a flag aqui, mas isPlatformOwner cobre o GH)
+  //  3. Senão → mais ANTIGO (created_at ASC) — primeiro tenant onde foi
+  //     vinculado, mais provável de ser o "verdadeiro" home
+  const elevated = validRows.some((r) => r.role === "superadmin" || r.role === "partner_admin");
+
+  let chosen: UtRow | undefined;
+  const singleDefault = validRows.filter((r) => r.is_default);
+  if (singleDefault.length === 1) {
+    chosen = singleDefault[0];
+  } else if (elevated) {
+    chosen = validRows.find((r) => r.tenant?.is_platform_owner) ?? validRows[validRows.length - 1];
+  } else {
+    // mais antigo primeiro (created_at ASC)
+    chosen = [...validRows].sort((a, b) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    )[0];
+  }
 
   if (!chosen || !chosen.tenant) {
     return NextResponse.json({ error: "NO_TENANT_ACCESS" }, { status: 403 });
   }
 
-  // Self-heal: se houver múltiplos is_default=true OU o escolhido não é default,
-  // normaliza pra ter exatamente 1 default (o escolhido) — evita o erro
+  // Self-heal: garante exatamente 1 default (o escolhido) — evita o erro
   // "multiple rows returned" em queries .maybeSingle() futuras.
   const defaults = rows.filter((r) => r.is_default);
   const needsNormalize = defaults.length !== 1 || defaults[0]?.id !== chosen.id;

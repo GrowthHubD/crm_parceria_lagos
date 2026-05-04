@@ -5,9 +5,10 @@ import {
   timestamp,
   uuid,
   unique,
+  uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { tenant } from "./tenants";
 
 // ============================================
@@ -91,6 +92,12 @@ export const userTenant = pgTable(
     unique("uq_user_tenant").on(table.userId, table.tenantId),
     index("idx_user_tenant_user").on(table.userId),
     index("idx_user_tenant_tenant").on(table.tenantId),
+    // Garante no máximo 1 row com is_default=true por user. Estado anterior
+    // (multiple defaults) causou bug de identidade. Migration manual em
+    // drizzle/0XXX_one_default_tenant.sql precisa rodar APÓS cleanup-helio.
+    uniqueIndex("uq_user_tenant_default")
+      .on(table.userId)
+      .where(sql`${table.isDefault} = true`),
   ]
 );
 

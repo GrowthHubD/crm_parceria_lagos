@@ -30,6 +30,13 @@ export interface ProvisionClientInput {
   adminName?: string;
   /** Senha opcional. Se fornecida (e o user for novo), permite login por email/senha além do magic link. */
   adminPassword?: string;
+  /**
+   * Por padrão (false): se o adminEmail já pertencer a um user com vínculo em
+   * outro tenant, falha com 409. Setar `true` (apenas superadmin) permite
+   * compartilhar o mesmo user entre tenants — o novo binding NÃO recebe
+   * isDefault=true (não rouba o tenant atual do user).
+   */
+  reuseExistingUser?: boolean;
 }
 
 export interface ProvisionClientResult {
@@ -163,13 +170,37 @@ export async function provisionClient(
   if (input.adminEmail) {
     const supa = getSupabaseAdmin();
 
-    // 7.1) Resolve user no Supabase Auth (cria ou recupera + reseta senha se vier)
+    // 7.1) Resolve user no Supabase Auth (sem side-effects ainda)
     const { data: listData } = await supa.auth.admin.listUsers();
     const existing = listData?.users?.find((u) => u.email === input.adminEmail);
 
+    // 7.2) Se user já existe, checa se já tem vínculo em outro tenant ANTES
+    // de qualquer side-effect. Se sim e reuseExistingUser=false → bloqueia.
+    let isReuse = false;
+    if (existing) {
+      const otherBindings = await db
+        .select({ tenantId: userTenant.tenantId })
+        .from(userTenant)
+        .where(eq(userTenant.userId, existing.id));
+
+      if (otherBindings.length > 0 && !input.reuseExistingUser) {
+        const conflictError = new Error(
+          `Email ${input.adminEmail} já pertence a um usuário ativo em outro tenant ` +
+          `(${otherBindings.length} vínculo(s)). Use email exclusivo do cliente, ou ` +
+          `passe reuseExistingUser=true (somente superadmin) para compartilhar a conta.`
+        );
+        (conflictError as Error & { code?: string; status?: number }).code = "EMAIL_ALREADY_BOUND";
+        (conflictError as Error & { code?: string; status?: number }).status = 409;
+        throw conflictError;
+      }
+      isReuse = otherBindings.length > 0;
+    }
+
     if (existing) {
       adminUserId = existing.id;
-      if (input.adminPassword) {
+      if (input.adminPassword && !isReuse) {
+        // Só atualiza senha se NÃO for user compartilhado — evita resetar
+        // credencial de alguém que já é admin de outro tenant.
         const { error: updateError } = await supa.auth.admin.updateUserById(existing.id, {
           password: input.adminPassword,
         });
@@ -192,7 +223,7 @@ export async function provisionClient(
       passwordSet = !!input.adminPassword;
     }
 
-    // 7.2) Espelha em public.user — detecta collision de email com outro id
+    // 7.3) Espelha em public.user — detecta collision de email com outro id
     const [byEmail] = await db
       .select({ id: user.id })
       .from(user)
@@ -216,14 +247,16 @@ export async function provisionClient(
       });
     }
 
-    // 7.3) Vincula ao tenant como admin (idempotente)
+    // 7.4) Vincula ao tenant como admin.
+    // - User novo (não-reuse): isDefault=true (é o tenant principal dele)
+    // - User compartilhado (reuse): isDefault=false (não rouba o default atual)
     await db
       .insert(userTenant)
       .values({
         userId: adminUserId,
         tenantId: newTenant.id,
         role: "admin",
-        isDefault: true,
+        isDefault: !isReuse,
       })
       .onConflictDoNothing();
 

@@ -186,22 +186,39 @@ export async function getTenantContext(
   }
 
   // ── Default path ───────────────────────────────────────────────────────
-  const [row] = await db
+  // Pega TODAS as rows pra escolher de forma determinística — múltiplos
+  // is_default=true pode acontecer (estado legado) e .limit(1) sem ordem
+  // poderia pegar o tenant errado.
+  const allRows = await db
     .select({
       tenantId: tenant.id,
       tenantSlug: tenant.slug,
       isPlatformOwner: tenant.isPlatformOwner,
       role: userTenant.role,
+      isDefault: userTenant.isDefault,
+      createdAt: userTenant.createdAt,
     })
     .from(userTenant)
     .innerJoin(tenant, eq(userTenant.tenantId, tenant.id))
-    .where(
-      and(
-        eq(userTenant.userId, session.user.id),
-        eq(userTenant.isDefault, true)
-      )
-    )
-    .limit(1);
+    .where(eq(userTenant.userId, session.user.id));
+
+  let row: (typeof allRows)[number] | undefined;
+  if (allRows.length === 0) {
+    row = undefined;
+  } else {
+    const defaults = allRows.filter((r) => r.isDefault);
+    const elevated = allRows.some((r) => r.role === "superadmin" || r.role === "partner_admin");
+
+    if (defaults.length === 1) {
+      row = defaults[0];
+    } else if (elevated) {
+      row =
+        allRows.find((r) => r.isPlatformOwner) ??
+        [...allRows].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0];
+    } else {
+      row = [...allRows].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0];
+    }
+  }
 
   if (!row) {
     if (isDev) return { ...DEV_TENANT_CONTEXT, userId: session.user.id };

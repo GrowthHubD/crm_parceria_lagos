@@ -72,6 +72,14 @@ export async function POST(
       );
     }
 
+    // Conta vínculos do user — se >1 (compartilhado entre tenants),
+    // proíbe reset de senha (afetaria credencial em outros tenants).
+    const allBindings = await db
+      .select({ tenantId: userTenant.tenantId })
+      .from(userTenant)
+      .where(eq(userTenant.userId, adminRow.userId));
+    const isShared = allBindings.length > 1;
+
     const body = await request.json();
     const parsed = bodySchema.safeParse(body);
     if (!parsed.success) {
@@ -100,6 +108,20 @@ export async function POST(
     }
 
     // reset-password
+    if (isShared) {
+      return NextResponse.json(
+        {
+          error: "SHARED_USER_RESET_FORBIDDEN",
+          message:
+            "Esse admin é compartilhado com outros tenants — resetar a senha aqui afetaria o login em todos. " +
+            "Peça pro admin usar 'esqueci a senha' diretamente.",
+          adminEmail: adminRow.email,
+          tenantCount: allBindings.length,
+        },
+        { status: 409 }
+      );
+    }
+
     const { error: updateError } = await supa.auth.admin.updateUserById(adminRow.userId, {
       password: parsed.data.newPassword,
     });

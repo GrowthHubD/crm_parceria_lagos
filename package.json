@@ -14,7 +14,9 @@
     "db:wipe": "npx tsx src/lib/db/wipe.ts",
     "cf:build": "opennextjs-cloudflare build && node scripts/patch-cf-handler.mjs",
     "cf:preview": "opennextjs-cloudflare preview",
-    "cf:deploy": "opennextjs-cloudflare deploy"
+    "cf:deploy": "opennextjs-cloudflare deploy",
+    "test:e2e": "tsx tests/e2e/run-multiagent.ts",
+    "test:cleanup": "tsx tests/e2e/cleanup.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1028.0",

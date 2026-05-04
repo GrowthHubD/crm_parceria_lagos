@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Loader2, CheckCircle2, Phone, QrCode, KeyRound, Link2, Copy, ChevronDown } from "lucide-react";
+import { Plus, Loader2, CheckCircle2, Phone, QrCode, KeyRound, Link2, Copy, ChevronDown, AlertTriangle } from "lucide-react";
+import { useSession } from "@/lib/auth-client";
 
 export interface PartnerClient {
   id: string;
@@ -32,6 +33,8 @@ interface Props {
 
 export function PartnerClientsManager({ initialClients }: Props) {
   const router = useRouter();
+  const { data: sessionData } = useSession();
+  const partnerEmail = sessionData?.user?.email?.toLowerCase() ?? "";
   // Lista vem direto da prop (SSR). Depois de criar, chamamos router.refresh() e o Next re-renderiza.
   const clients = initialClients;
   const [showForm, setShowForm] = useState(false);
@@ -173,6 +176,17 @@ export function PartnerClientsManager({ initialClients }: Props) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    // Validação client-side: adminEmail !== partnerEmail
+    if (partnerEmail && adminEmail.trim().toLowerCase() === partnerEmail) {
+      setError("Use um email DIFERENTE do seu para o admin do cliente. Senão você vira admin do tenant criado.");
+      return;
+    }
+    if (!adminEmail.trim()) {
+      setError("Email do admin é obrigatório.");
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -395,17 +409,29 @@ export function PartnerClientsManager({ initialClients }: Props) {
             </div>
 
             <div>
-              <label className="text-small text-muted block mb-1">Email do admin do cliente</label>
+              <label className="text-small text-muted block mb-1">Email do admin do cliente *</label>
               <input
                 type="email"
+                required
                 value={adminEmail}
                 onChange={(e) => setAdminEmail(e.target.value)}
-                className="w-full px-3 py-2 bg-surface-2 border border-border rounded-lg text-foreground"
+                className={`w-full px-3 py-2 bg-surface-2 border rounded-lg text-foreground ${
+                  partnerEmail && adminEmail.toLowerCase() === partnerEmail
+                    ? "border-destructive"
+                    : "border-border"
+                }`}
                 placeholder="dono@acme.com.br"
               />
-              <p className="text-xs text-muted/70 mt-1">
-                Receberá link mágico pra conectar o WhatsApp.
-              </p>
+              {partnerEmail && adminEmail.toLowerCase() === partnerEmail ? (
+                <p className="text-xs text-destructive mt-1 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />
+                  Esse é SEU email — use o email do cliente, senão você vira admin do tenant dele.
+                </p>
+              ) : (
+                <p className="text-xs text-muted/70 mt-1">
+                  Email do dono/admin do cliente. <strong>Não use o seu próprio email.</strong>
+                </p>
+              )}
             </div>
 
             <div>
