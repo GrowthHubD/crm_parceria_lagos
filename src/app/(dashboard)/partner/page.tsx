@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { getTenantContext } from "@/lib/tenant";
+import { getTenantContext, canManagePartnerClients } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { tenant } from "@/lib/db/schema/tenants";
 import { whatsappNumber } from "@/lib/db/schema/crm";
@@ -19,11 +19,12 @@ export default async function PartnerPage() {
     redirect("/login");
   }
 
-  if (ctx.role !== "partner_admin" && ctx.role !== "superadmin") {
+  if (!canManagePartnerClients(ctx)) {
     redirect("/");
   }
 
-  // Lista clientes do parceiro (ou todos, se superadmin)
+  // Lista clientes do parceiro (ou todos, se superadmin).
+  // partner_admin/manager: clientes cujo partner_id = tenant atual.
   const whereClause =
     ctx.role === "superadmin" ? undefined : eq(tenant.partnerId, ctx.tenantId);
 

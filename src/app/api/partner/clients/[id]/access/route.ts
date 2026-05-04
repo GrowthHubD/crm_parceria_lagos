@@ -12,7 +12,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { eq, and } from "drizzle-orm";
-import { getTenantContext } from "@/lib/tenant";
+import { getTenantContext, canManagePartnerClients } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { tenant } from "@/lib/db/schema/tenants";
 import { user, userTenant } from "@/lib/db/schema/users";
@@ -26,17 +26,13 @@ const bodySchema = z.discriminatedUnion("action", [
   }),
 ]);
 
-function canAccess(role: string) {
-  return role === "partner_admin" || role === "superadmin";
-}
-
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const ctx = await getTenantContext(request.headers);
-    if (!canAccess(ctx.role)) {
+    if (!canManagePartnerClients(ctx)) {
       return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
     }
 
@@ -53,6 +49,8 @@ export async function POST(
       return NextResponse.json({ error: "Cliente não encontrado" }, { status: 404 });
     }
 
+    // superadmin acessa qualquer cliente. partner_admin/manager: só clientes
+    // do próprio tenant (partner_id == tenant atual).
     if (ctx.role !== "superadmin" && target.partnerId !== ctx.tenantId) {
       return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
     }

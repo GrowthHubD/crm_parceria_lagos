@@ -18,8 +18,24 @@ export interface TenantContext {
   tenantId: string;
   tenantSlug: string;
   isPlatformOwner: boolean;
-  role: string; // role do user neste tenant: 'superadmin' | 'admin' | 'operator'
+  isPartner: boolean;
+  role: string; // role do user neste tenant: 'superadmin' | 'admin' | 'operator' | 'manager' | 'partner_admin'
   userId: string;
+}
+
+/**
+ * Helper: o user pode gerenciar clientes (criar/listar/resetar senha)?
+ * Critérios:
+ *   1. role superadmin → sempre
+ *   2. role partner_admin → sempre (já é dono do tenant partner)
+ *   3. role manager E tenant.is_partner OR tenant.is_platform_owner → sim
+ *      (gerente de partner/platform delegando o trabalho de onboarding)
+ *   4. demais → não
+ */
+export function canManagePartnerClients(ctx: TenantContext): boolean {
+  if (ctx.role === "superadmin" || ctx.role === "partner_admin") return true;
+  if (ctx.role === "manager" && (ctx.isPartner || ctx.isPlatformOwner)) return true;
+  return false;
 }
 
 // Bypass de auth pra dev local. Exige duas condições — NODE_ENV=development
@@ -69,6 +85,7 @@ export const DEV_TENANT_CONTEXT: TenantContext = {
   tenantId: "dev-tenant-id",
   tenantSlug: "gh",
   isPlatformOwner: true,
+  isPartner: false,
   role: "partner",
   userId: "dev-user-id",
 };
@@ -138,6 +155,7 @@ export async function getTenantContext(
           id: tenant.id,
           slug: tenant.slug,
           isPlatformOwner: tenant.isPlatformOwner,
+          isPartner: tenant.isPartner,
         })
         .from(tenant)
         .where(eq(tenant.id, tenantOverride))
@@ -148,6 +166,7 @@ export async function getTenantContext(
           tenantId: t.id,
           tenantSlug: t.slug,
           isPlatformOwner: t.isPlatformOwner,
+          isPartner: t.isPartner,
           role: "superadmin",
           userId: session.user.id,
         };
@@ -160,6 +179,7 @@ export async function getTenantContext(
           id: tenant.id,
           slug: tenant.slug,
           isPlatformOwner: tenant.isPlatformOwner,
+          isPartner: tenant.isPartner,
         })
         .from(tenant)
         .where(
@@ -175,6 +195,7 @@ export async function getTenantContext(
           tenantId: t.id,
           tenantSlug: t.slug,
           isPlatformOwner: t.isPlatformOwner,
+          isPartner: t.isPartner,
           role: "partner_admin",
           userId: session.user.id,
         };
@@ -194,6 +215,7 @@ export async function getTenantContext(
       tenantId: tenant.id,
       tenantSlug: tenant.slug,
       isPlatformOwner: tenant.isPlatformOwner,
+      isPartner: tenant.isPartner,
       role: userTenant.role,
       isDefault: userTenant.isDefault,
       createdAt: userTenant.createdAt,
@@ -229,6 +251,7 @@ export async function getTenantContext(
     tenantId: row.tenantId,
     tenantSlug: row.tenantSlug,
     isPlatformOwner: row.isPlatformOwner,
+    isPartner: row.isPartner,
     role: row.role,
     userId: session.user.id,
   };

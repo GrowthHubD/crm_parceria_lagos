@@ -86,7 +86,7 @@ export async function GET(_request: NextRequest) {
   // que aconteciam em provisioning antigo rodado múltiplas vezes pro mesmo user.
   const { data: utRows, error: utErr } = await admin
     .from("user_tenant")
-    .select("id, role, is_default, created_at, tenant:tenant_id(id, slug, is_platform_owner)")
+    .select("id, role, is_default, created_at, tenant:tenant_id(id, slug, is_platform_owner, is_partner)")
     .eq("user_id", userId)
     .order("is_default", { ascending: false })
     .order("created_at", { ascending: false });
@@ -103,7 +103,7 @@ export async function GET(_request: NextRequest) {
     role: string;
     is_default: boolean;
     created_at: string;
-    tenant: { id: string; slug: string; is_platform_owner: boolean } | null;
+    tenant: { id: string; slug: string; is_platform_owner: boolean; is_partner: boolean } | null;
   };
 
   const rows = (utRows ?? []) as UtRow[];
@@ -166,6 +166,7 @@ export async function GET(_request: NextRequest) {
       tenantId: t.id,
       tenantSlug: t.slug,
       isPlatformOwner: t.is_platform_owner,
+      isPartner: t.is_partner,
       role: utRow.role,
     });
   } catch (e: unknown) {
@@ -179,6 +180,7 @@ export async function GET(_request: NextRequest) {
     tenantId: t.id,
     tenantSlug: t.slug,
     isPlatformOwner: t.is_platform_owner,
+    isPartner: t.is_partner,
     role: utRow.role,
     modules,
     userName: userRow.name,

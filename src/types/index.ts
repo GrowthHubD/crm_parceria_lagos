@@ -152,6 +152,10 @@ export const DEFAULT_PERMISSIONS: Record<
       "configuracoes",
       "automations",
       "tasks",
+      // Módulos de gestão de clientes (gerente do partner pode delegar onboarding)
+      // Filtrados em getUserModules se não estiver num tenant partner/platform.
+      "partner_clients",
+      "partner_metrics",
     ],
     canEdit: true,
     canDelete: false,

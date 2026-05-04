@@ -301,6 +301,88 @@ export async function scenarioG(env: TestEnv): Promise<ScenarioResult> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// I. Manager de tenant partner consegue criar cliente
+// ─────────────────────────────────────────────────────────────────────────────
+export async function scenarioI(env: TestEnv): Promise<ScenarioResult> {
+  return runScenario("I:manager-can-create", async () => {
+    const { createClient } = await import("@supabase/supabase-js");
+    const sb = createClient(env.supabaseUrl, env.supabaseServiceKey);
+
+    // Cria manager temporário no tenant do partner de teste (que é is_partner=true)
+    const managerEmail = `test-${env.nonce}-manager@test.local`;
+    const managerPassword = `MgrPass-${env.nonce}!`;
+
+    // Pega tenant do partner de teste
+    const { data: partnerTenant } = await sb
+      .from("tenant")
+      .select("id, slug")
+      .eq("slug", "test-e2e-partner-tenant")
+      .single();
+    if (!partnerTenant) {
+      return { ok: false, errors: ["test-e2e-partner-tenant não existe — rode scripts/create-test-partner.ts"] };
+    }
+    const partnerTenantId = (partnerTenant as { id: string }).id;
+
+    // Cria user manager
+    const { data: created, error: createErr } = await sb.auth.admin.createUser({
+      email: managerEmail,
+      password: managerPassword,
+      email_confirm: true,
+      user_metadata: { name: "Test Manager" },
+    });
+    if (createErr || !created.user) {
+      return { ok: false, errors: [`Manager create falhou: ${createErr?.message}`] };
+    }
+    const managerId = created.user.id;
+
+    // Mirror em public.user
+    await sb.from("user").upsert({
+      id: managerId,
+      name: "Test Manager",
+      email: managerEmail,
+      emailVerified: true,
+      role: "manager",
+      isActive: true,
+    });
+
+    // user_tenant: manager do partner tenant
+    await sb.from("user_tenant").insert({
+      user_id: managerId,
+      tenant_id: partnerTenantId,
+      role: "manager",
+      is_default: true,
+    });
+
+    try {
+      // Loga como manager
+      const manager = await loginAs(env, managerEmail, managerPassword);
+
+      // Tenta criar cliente
+      const ids = testIds(env, "i");
+      const create = await createClient_(env, manager.cookieHeader, {
+        name: ids.name,
+        slug: ids.slug,
+        adminEmail: ids.adminEmail,
+        adminPassword: ids.adminPassword,
+      });
+
+      if (create.status !== 201) {
+        return {
+          ok: false,
+          errors: [`Manager NÃO conseguiu criar cliente: ${create.status} ${JSON.stringify(create.body)}`],
+        };
+      }
+      return { ok: true, details: { createdSlug: ids.slug } };
+    } finally {
+      // Cleanup do manager
+      await sb.from("user_tenant").delete().eq("user_id", managerId);
+      await sb.from("user").delete().eq("id", managerId);
+      await sb.auth.admin.deleteUser(managerId);
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // H. Cleanup: deleta todos test- via service role direto no DB
 // ─────────────────────────────────────────────────────────────────────────────
 export async function scenarioH_cleanup(env: TestEnv): Promise<ScenarioResult> {

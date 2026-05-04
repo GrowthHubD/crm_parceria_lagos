@@ -7,7 +7,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getTenantContext } from "@/lib/tenant";
+import { getTenantContext, canManagePartnerClients } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { tenant } from "@/lib/db/schema/tenants";
 import { whatsappNumber } from "@/lib/db/schema/crm";
@@ -28,14 +28,11 @@ const createSchema = z.object({
   reuseExistingUser: z.boolean().optional(),
 });
 
-function canAccess(role: string) {
-  return role === "partner_admin" || role === "superadmin";
-}
 
 export async function GET(request: NextRequest) {
   try {
     const ctx = await getTenantContext(request.headers);
-    if (!canAccess(ctx.role)) {
+    if (!canManagePartnerClients(ctx)) {
       return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
     }
 
@@ -74,7 +71,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const ctx = await getTenantContext(request.headers);
-    if (!canAccess(ctx.role)) {
+    if (!canManagePartnerClients(ctx)) {
       return NextResponse.json({ error: "Acesso negado" }, { status: 403 });
     }
 

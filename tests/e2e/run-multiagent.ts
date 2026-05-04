@@ -27,6 +27,7 @@ import {
   scenarioE,
   scenarioF,
   scenarioG,
+  scenarioI,
   scenarioH_cleanup,
 } from "./scenarios";
 
@@ -52,6 +53,7 @@ const ALL_SCENARIOS = [
   { id: "E", fn: scenarioE },
   { id: "F", fn: scenarioF },
   { id: "G", fn: scenarioG },
+  { id: "I", fn: scenarioI },
 ];
 
 async function main() {
