@@ -308,8 +308,8 @@ export async function scenarioH_cleanup(env: TestEnv): Promise<ScenarioResult> {
     const { createClient } = await import("@supabase/supabase-js");
     const sb = createClient(env.supabaseUrl, env.supabaseServiceKey);
 
-    // Deleta todo tenant cujo slug começa com test-{nonce}
-    // CASCADE em FK deve limpar pipelines, whatsapp_number, user_tenant
+    // Deleta SOMENTE tenants criados pelos cenários deste run (test-{nonce}-*)
+    // — não toca em test-e2e-partner-tenant (fixture preservada).
     const prefix = `test-${env.nonce}`;
     const { data: tenants, error: listErr } = await sb
       .from("tenant")
@@ -320,6 +320,19 @@ export async function scenarioH_cleanup(env: TestEnv): Promise<ScenarioResult> {
     }
     const tenantIds = (tenants ?? []).map((t) => t.id);
     if (tenantIds.length > 0) {
+      // Algumas FK apontando pra tenant não tem ON DELETE CASCADE.
+      // Limpa em ordem manual antes de deletar tenant.
+      const cleanupTables = [
+        "whatsapp_number",
+        "lead",
+        "pipeline_stage",
+        "pipeline",
+        "automation",
+        "task",
+      ];
+      for (const tbl of cleanupTables) {
+        await sb.from(tbl).delete().in("tenant_id", tenantIds);
+      }
       const { error: delErr } = await sb.from("tenant").delete().in("id", tenantIds);
       if (delErr) {
         return { ok: false, errors: [`Delete tenants falhou: ${delErr.message}`] };

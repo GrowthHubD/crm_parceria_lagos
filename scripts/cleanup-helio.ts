@@ -50,58 +50,44 @@ async function main() {
   console.log(`Cleanup Helio — modo: ${confirm ? "EXECUTAR" : "DRY RUN"}`);
   console.log("━".repeat(72));
 
-  // 1) Acha todos user_tenant role='partner_admin'
-  const { data: partnerRows, error: e1 } = await sb
+  // 1) Acha todos users elevated (superadmin OU partner_admin)
+  const { data: elevatedRows, error: e1 } = await sb
     .from("user_tenant")
     .select("user_id, tenant_id, role")
-    .eq("role", "partner_admin");
+    .in("role", ["partner_admin", "superadmin"]);
   if (e1) {
-    console.error("Falha listando partner_admins:", e1.message);
+    console.error("Falha listando elevated users:", e1.message);
     process.exit(1);
   }
-  if (!partnerRows || partnerRows.length === 0) {
-    console.log("Nenhum partner_admin encontrado.");
+  if (!elevatedRows || elevatedRows.length === 0) {
+    console.log("Nenhum elevated user encontrado.");
     return;
   }
 
-  const partners = partnerRows as { user_id: string; tenant_id: string; role: string }[];
-  console.log(`Partner_admins encontrados: ${partners.length}\n`);
+  // Dedup por user_id (pode aparecer várias vezes se for elevated em vários tenants)
+  const userIds = Array.from(new Set((elevatedRows as { user_id: string }[]).map((r) => r.user_id)));
+  console.log(`Elevated users encontrados: ${userIds.length}\n`);
 
   let totalDeletes = 0;
   let totalDefaultFixes = 0;
 
-  for (const p of partners) {
-    // Pega info do user
+  for (const userId of userIds) {
     const { data: userRow } = await sb
       .from("user")
       .select("id, name, email")
-      .eq("id", p.user_id)
+      .eq("id", userId)
       .single();
     const u = userRow as { id: string; name: string; email: string } | null;
 
-    // Pega home tenant
-    const { data: homeT } = await sb
-      .from("tenant")
-      .select("id, slug, name, is_platform_owner, is_partner, partner_id")
-      .eq("id", p.tenant_id)
-      .single();
-    const home = homeT as TenantRow | null;
-    if (!home) continue;
-
-    // Pega TODOS user_tenant deste user
+    // Pega TODOS user_tenant deste user com info dos tenants
     const { data: allUt } = await sb
       .from("user_tenant")
       .select("id, user_id, tenant_id, role, is_default, created_at")
-      .eq("user_id", p.user_id);
+      .eq("user_id", userId);
     const bindings = (allUt ?? []) as UtRow[];
 
     if (bindings.length === 1) continue; // single binding, sem problema
 
-    console.log(`─ ${u?.name ?? "?"} <${u?.email ?? p.user_id}>`);
-    console.log(`   Home tenant: ${home.slug} (id=${home.id})`);
-    console.log(`   Total bindings: ${bindings.length}`);
-
-    // Pega tenants alvos
     const tenantIds = bindings.map((b) => b.tenant_id);
     const { data: tenantsRaw } = await sb
       .from("tenant")
@@ -110,57 +96,85 @@ async function main() {
     const tenants = (tenantsRaw ?? []) as TenantRow[];
     const tenantMap = new Map(tenants.map((t) => [t.id, t]));
 
+    // Determina home tenant deste user (em ordem de prioridade):
+    //  1. tenant onde user é superadmin + tenant.is_platform_owner=true → gh
+    //  2. tenant onde user é superadmin → outro com role superadmin
+    //  3. tenant onde user é partner_admin + tenant.is_partner=true → o home do parceiro
+    //  4. fallback: o mais antigo
+    const sortedByCreation = [...bindings].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    const superInPlatform = bindings.find(
+      (b) => b.role === "superadmin" && tenantMap.get(b.tenant_id)?.is_platform_owner
+    );
+    const anySuper = bindings.find((b) => b.role === "superadmin");
+    const partnerInPartner = bindings.find(
+      (b) => b.role === "partner_admin" && tenantMap.get(b.tenant_id)?.is_partner
+    );
+    const homeBinding = superInPlatform ?? anySuper ?? partnerInPartner ?? sortedByCreation[0];
+    const home = tenantMap.get(homeBinding.tenant_id);
+    if (!home) continue;
+
+    console.log(`─ ${u?.name ?? "?"} <${u?.email ?? userId}>`);
+    console.log(`   Home detectado: ${home.slug} (role=${homeBinding.role}, platform_owner=${home.is_platform_owner}, partner=${home.is_partner})`);
+    console.log(`   Total bindings: ${bindings.length}`);
+
     const wrongBindings: UtRow[] = [];
     for (const b of bindings) {
       const t = tenantMap.get(b.tenant_id);
       if (!t) continue;
-      const isWrongAdmin = b.role === "admin" && t.partner_id === home.id;
+      // Wrong = role='admin' em tenant cujo partner_id aponta pra UM dos tenants do user
+      // (= user virou admin do cliente que ele criou)
+      const userOwnsThisPartner = bindings.some(
+        (other) =>
+          (other.role === "partner_admin" || other.role === "superadmin") &&
+          other.tenant_id === t.partner_id
+      );
+      const isWrongAdmin = b.role === "admin" && userOwnsThisPartner;
       console.log(
         `   ${isWrongAdmin ? "✗" : " "} [${b.role.padEnd(13)}] ${t.slug.padEnd(30)} ` +
-        `is_default=${b.is_default} created=${b.created_at.slice(0, 10)}`
+        `is_default=${b.is_default} created=${b.created_at.slice(0, 10)}` +
+        (b.id === homeBinding.id ? "  ← HOME" : "")
       );
       if (isWrongAdmin) wrongBindings.push(b);
     }
 
-    // Plano: deletar wrongBindings + garantir is_default=true no home
-    if (wrongBindings.length > 0) {
-      console.log(`   PLANO:`);
-      for (const w of wrongBindings) {
-        const t = tenantMap.get(w.tenant_id);
-        console.log(`     - DELETE user_tenant id=${w.id} (${u?.email} ↔ ${t?.slug})`);
-      }
+    const needsHomeDefault = !homeBinding.is_default;
+    const otherTrueDefaults = bindings.filter(
+      (b) => b.is_default && b.id !== homeBinding.id && !wrongBindings.some((w) => w.id === b.id)
+    );
+
+    if (wrongBindings.length === 0 && !needsHomeDefault && otherTrueDefaults.length === 0) {
+      console.log(`   ✓ Estado OK — nenhuma mudança necessária\n`);
+      continue;
     }
 
-    // Garante is_default=true no home, false em outros válidos
-    const homeBinding = bindings.find((b) => b.tenant_id === home.id);
-    if (homeBinding && !homeBinding.is_default) {
+    console.log(`   PLANO:`);
+    for (const w of wrongBindings) {
+      const t = tenantMap.get(w.tenant_id);
+      console.log(`     - DELETE binding errado (${u?.email} ↔ ${t?.slug})`);
+    }
+    if (needsHomeDefault) {
       console.log(`     - SET is_default=true em binding home (${home.slug})`);
     }
-    const otherTrueDefaults = bindings.filter(
-      (b) => b.is_default && b.tenant_id !== home.id && !wrongBindings.some((w) => w.id === b.id)
-    );
     for (const b of otherTrueDefaults) {
       const t = tenantMap.get(b.tenant_id);
-      console.log(`     - SET is_default=false em binding ${t?.slug ?? b.tenant_id}`);
+      console.log(`     - SET is_default=false em ${t?.slug ?? b.tenant_id}`);
     }
 
     if (confirm) {
-      // Executa
       for (const w of wrongBindings) {
         const { error } = await sb.from("user_tenant").delete().eq("id", w.id);
         if (error) console.error(`     ! Delete falhou: ${error.message}`);
         else totalDeletes++;
       }
-      // Reset all is_default → false
-      await sb.from("user_tenant").update({ is_default: false }).eq("user_id", p.user_id);
-      // Set home como default
-      if (homeBinding) {
-        const { error } = await sb
-          .from("user_tenant")
-          .update({ is_default: true })
-          .eq("id", homeBinding.id);
-        if (!error) totalDefaultFixes++;
-      }
+      // Normaliza defaults: zera todos, depois marca só o home
+      await sb.from("user_tenant").update({ is_default: false }).eq("user_id", userId);
+      const { error } = await sb
+        .from("user_tenant")
+        .update({ is_default: true })
+        .eq("id", homeBinding.id);
+      if (!error) totalDefaultFixes++;
     }
 
     console.log();

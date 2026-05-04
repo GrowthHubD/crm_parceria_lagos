@@ -16,7 +16,14 @@ async function main() {
   }
   const sb = createClient(url, key);
 
-  const { data: tenants, error } = await sb.from("tenant").select("id, slug").like("slug", "test-%");
+  // Preserva fixture do partner de teste (test-e2e-partner-tenant)
+  const PRESERVED_SLUGS = ["test-e2e-partner-tenant"];
+  const PRESERVED_EMAILS = ["test-e2e-partner@test.local"];
+  const { data: tenants, error } = await sb
+    .from("tenant")
+    .select("id, slug")
+    .like("slug", "test-%")
+    .not("slug", "in", `(${PRESERVED_SLUGS.map((s) => `"${s}"`).join(",")})`);
   if (error) {
     console.error("List falhou:", error.message);
     process.exit(1);
@@ -25,6 +32,17 @@ async function main() {
 
   if ((tenants?.length ?? 0) > 0) {
     const ids = tenants!.map((t) => t.id);
+    const cleanupTables = [
+      "whatsapp_number",
+      "lead",
+      "pipeline_stage",
+      "pipeline",
+      "automation",
+      "task",
+    ];
+    for (const tbl of cleanupTables) {
+      await sb.from(tbl).delete().in("tenant_id", ids);
+    }
     const { error: delErr } = await sb.from("tenant").delete().in("id", ids);
     if (delErr) {
       console.error("Delete falhou:", delErr.message);
@@ -34,7 +52,9 @@ async function main() {
   }
 
   const { data: usersList } = await sb.auth.admin.listUsers({ perPage: 1000 });
-  const testUsers = (usersList?.users ?? []).filter((u) => u.email?.includes("test-"));
+  const testUsers = (usersList?.users ?? []).filter(
+    (u) => u.email?.includes("test-") && !PRESERVED_EMAILS.includes(u.email ?? "")
+  );
   console.log(`Encontrados ${testUsers.length} users test-*`);
 
   let deleted = 0;
