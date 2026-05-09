@@ -64,8 +64,13 @@ export default function DashboardLayout({
       try {
         const cached = sessionStorage.getItem(cacheKey);
         if (cached) {
-          setTenantCtx(JSON.parse(cached));
-          return;
+          const parsed = JSON.parse(cached) as TenantContext;
+          // Cache velho (pré-tenant-switcher) não tem availableTenants — invalida pra forçar refetch
+          if (parsed.availableTenants !== undefined) {
+            setTenantCtx(parsed);
+            return;
+          }
+          sessionStorage.removeItem(cacheKey);
         }
       } catch { /* sessionStorage indisponível — segue pro fetch */ }
     }

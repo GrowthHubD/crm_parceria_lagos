@@ -101,6 +101,7 @@ export function Sidebar({
   isPlatformOwner,
   userName,
   userRole,
+  tenantSlug,
   tenantId,
   availableTenants,
 }: SidebarProps) {
@@ -249,12 +250,28 @@ export function Sidebar({
         )}
       </nav>
 
-      {/* Footer: user info + collapse toggle */}
+      {/* Footer: user info + tenant atual + collapse toggle */}
       <div className="border-t border-border px-3 py-3 shrink-0">
         {!collapsed && (
           <div className="mb-3 px-1">
             <p className="text-sm font-medium text-foreground truncate">{userName}</p>
             <p className="text-label mt-0.5">{ROLE_LABELS[userRole] ?? userRole}</p>
+            {tenantSlug && (
+              <div className="mt-2 flex items-center gap-1.5 px-2 py-1 rounded-md bg-primary/10 border border-primary/20">
+                <Building2 className="w-3 h-3 text-primary shrink-0" />
+                <span className="text-xs text-primary font-medium truncate" title={tenantSlug}>
+                  {tenantSlug}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+        {collapsed && tenantSlug && (
+          <div
+            className="mb-3 mx-auto p-1.5 rounded-md bg-primary/10 border border-primary/20"
+            title={`Tenant: ${tenantSlug}`}
+          >
+            <Building2 className="w-3.5 h-3.5 text-primary mx-auto" />
           </div>
         )}
 
