@@ -79,7 +79,15 @@ export async function POST(request: NextRequest) {
     }
 
     const d = parsed.data;
-    const tenantId = d.tenantId ?? GH_TENANT_ID;
+    // Sem fallback silencioso — workflow n8n DEVE passar tenantId explícito
+    // pra evitar que métricas de cliente Lagos vazem pro tenant GH.
+    const tenantId = d.tenantId;
+    if (!tenantId) {
+      return NextResponse.json(
+        { error: "tenantId é obrigatório no payload" },
+        { status: 400 }
+      );
+    }
 
     // Look up agent by name + tenant — create if not found
     let [agent] = await db

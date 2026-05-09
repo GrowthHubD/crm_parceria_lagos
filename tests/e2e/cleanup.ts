@@ -32,20 +32,100 @@ async function main() {
 
   if ((tenants?.length ?? 0) > 0) {
     const ids = tenants!.map((t) => t.id);
+
+    // Tabelas SEM tenant_id direto — limpa via FK transitiva ANTES das pais.
+    // crm_message → crm_conversation
+    const { data: convs } = await sb
+      .from("crm_conversation")
+      .select("id")
+      .in("tenant_id", ids);
+    const convIds = (convs ?? []).map((c: { id: string }) => c.id);
+    if (convIds.length > 0) {
+      await sb.from("crm_message").delete().in("conversation_id", convIds);
+      await sb.from("crm_conversation_tag").delete().in("conversation_id", convIds);
+    }
+
+    // automation_step / automation_step_version / automation_log → automation
+    const { data: autos } = await sb
+      .from("automation")
+      .select("id")
+      .in("tenant_id", ids);
+    const autoIds = (autos ?? []).map((a: { id: string }) => a.id);
+    if (autoIds.length > 0) {
+      await sb.from("automation_log").delete().in("automation_id", autoIds);
+      await sb.from("automation_step_version").delete().in("automation_id", autoIds);
+      await sb.from("automation_step").delete().in("automation_id", autoIds);
+    }
+
+    // lead_tag_assignment → lead
+    const { data: leads } = await sb.from("lead").select("id").in("tenant_id", ids);
+    const leadIds = (leads ?? []).map((l: { id: string }) => l.id);
+    if (leadIds.length > 0) {
+      await sb.from("lead_tag_assignment").delete().in("lead_id", leadIds);
+    }
+
+    // baileys_auth_state → whatsapp_number
+    const { data: wnums } = await sb
+      .from("whatsapp_number")
+      .select("id")
+      .in("tenant_id", ids);
+    const wnumIds = (wnums ?? []).map((w: { id: string }) => w.id);
+    if (wnumIds.length > 0) {
+      await sb.from("baileys_auth_state").delete().in("whatsapp_number_id", wnumIds);
+    }
+
+    // client_file / client_responsible → client
+    const { data: clients } = await sb
+      .from("client")
+      .select("id")
+      .in("tenant_id", ids);
+    const clientIds = (clients ?? []).map((c: { id: string }) => c.id);
+    if (clientIds.length > 0) {
+      await sb.from("client_file").delete().in("client_id", clientIds);
+      await sb.from("client_responsible").delete().in("client_id", clientIds);
+    }
+
+    // blog_post_tag → blog_post
+    const { data: posts } = await sb
+      .from("blog_post")
+      .select("id")
+      .in("tenant_id", ids);
+    const postIds = (posts ?? []).map((p: { id: string }) => p.id);
+    if (postIds.length > 0) {
+      await sb.from("blog_post_tag").delete().in("post_id", postIds);
+    }
+
+    // Ordem topológica: filhas primeiro, depois pais
     const cleanupTables = [
+      "lead_tag",
+      "kanban_task",
+      "kanban_column",
+      "notification",
+      "client",
+      "contract",
+      "financial_transaction",
+      "financial_config",
+      "sdr_metric_snapshot",
+      "sdr_agent",
+      "blog_post",
+      "blog_category",
+      "message_template",
+      "automation",
+      "crm_conversation",
       "whatsapp_number",
       "lead",
       "pipeline_stage",
       "pipeline",
-      "automation",
-      "task",
+      "user_tenant",
     ];
     for (const tbl of cleanupTables) {
-      await sb.from(tbl).delete().in("tenant_id", ids);
+      const { error: tblErr } = await sb.from(tbl).delete().in("tenant_id", ids);
+      if (tblErr) console.warn(`  ⚠ ${tbl}: ${tblErr.message}`);
     }
+
     const { error: delErr } = await sb.from("tenant").delete().in("id", ids);
     if (delErr) {
-      console.error("Delete falhou:", delErr.message);
+      console.error("Delete tenant falhou:", delErr.message);
       process.exit(1);
     }
     console.log(`✓ Deletados ${ids.length} tenants`);

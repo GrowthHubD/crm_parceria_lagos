@@ -33,10 +33,10 @@ export async function GET(request: NextRequest) {
     const today = format(new Date(), "yyyy-MM-dd");
     const todayFormatted = format(new Date(), "dd 'de' MMMM", { locale: ptBR });
 
-    // Fetch tasks due today, not completed
     const dueTasks = await db
       .select({
         id: kanbanTask.id,
+        tenantId: kanbanTask.tenantId,
         title: kanbanTask.title,
         priority: kanbanTask.priority,
         assignedTo: kanbanTask.assignedTo,
@@ -56,59 +56,66 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ sent: 0, message: "No tasks due today" });
     }
 
-    // Group by assignee
-    const byUser = new Map<string, { name: string; phone: string | null; tasks: typeof dueTasks }>();
-    for (const task of dueTasks) {
-      if (!byUser.has(task.assignedTo)) {
-        byUser.set(task.assignedTo, { name: task.assigneeName, phone: task.assigneePhone, tasks: [] });
-      }
-      byUser.get(task.assignedTo)!.tasks.push(task);
-    }
-
     const baseUrl = process.env.UAZAPI_BASE_URL;
     const groupJid = process.env.REMINDER_GROUP_JID ?? "";
 
-    const [wNum] = await db
-      .select()
-      .from(whatsappNumber)
-      .where(eq(whatsappNumber.isActive, true))
-      .limit(1);
-
-    // Fetch message template (fall back to default if not in DB)
-    let templateBody = DEFAULT_DAILY_TEMPLATE;
-    try {
-      const [tmpl] = await db
-        .select({ body: messageTemplate.body })
-        .from(messageTemplate)
-        .where(eq(messageTemplate.id, "daily_reminder"))
-        .limit(1);
-      if (tmpl) templateBody = tmpl.body;
-    } catch {
-      // Table may not exist yet — use default
+    // Agrupar por tenant primeiro — cada tenant usa SEU próprio whatsapp_number
+    const byTenant = new Map<string, typeof dueTasks>();
+    for (const t of dueTasks) {
+      if (!byTenant.has(t.tenantId)) byTenant.set(t.tenantId, []);
+      byTenant.get(t.tenantId)!.push(t);
     }
 
     let sentCount = 0;
+    const skippedTenants: string[] = [];
 
-    if (baseUrl && wNum) {
-      if (groupJid) {
-        // ── Group mode: one message per user, @mention them in the group ──
-        for (const [, data] of byUser) {
-          if (!data.phone) continue;
+    for (const [tenantId, tenantTasks] of byTenant) {
+      const [wNum] = await db
+        .select()
+        .from(whatsappNumber)
+        .where(and(eq(whatsappNumber.tenantId, tenantId), eq(whatsappNumber.isActive, true)))
+        .limit(1);
 
-          const taskLines = data.tasks
-            .map((t) => `${PRIORITY_EMOJI[t.priority] ?? "•"} ${t.title}`)
-            .join("\n");
+      if (!baseUrl || !wNum) {
+        skippedTenants.push(tenantId);
+        continue;
+      }
 
-          const message = applyTemplate(templateBody, {
-            nome: data.name.split(" ")[0],
-            data: todayFormatted,
-            qtd: String(data.tasks.length),
-            tarefas: taskLines,
-          });
+      // Template do tenant ou fallback
+      let templateBody = DEFAULT_DAILY_TEMPLATE;
+      try {
+        const [tmpl] = await db
+          .select({ body: messageTemplate.body })
+          .from(messageTemplate)
+          .where(and(eq(messageTemplate.id, "daily_reminder"), eq(messageTemplate.tenantId, tenantId)))
+          .limit(1);
+        if (tmpl) templateBody = tmpl.body;
+      } catch { /* tabela ausente — fallback */ }
 
-          // Prepend @mention for group
+      const byUser = new Map<string, { name: string; phone: string | null; tasks: typeof tenantTasks }>();
+      for (const task of tenantTasks) {
+        if (!byUser.has(task.assignedTo)) {
+          byUser.set(task.assignedTo, { name: task.assigneeName, phone: task.assigneePhone, tasks: [] });
+        }
+        byUser.get(task.assignedTo)!.tasks.push(task);
+      }
+
+      for (const [, data] of byUser) {
+        if (!data.phone) continue;
+
+        const taskLines = data.tasks
+          .map((t) => `${PRIORITY_EMOJI[t.priority] ?? "•"} ${t.title}`)
+          .join("\n");
+
+        const message = applyTemplate(templateBody, {
+          nome: data.name.split(" ")[0],
+          data: todayFormatted,
+          qtd: String(data.tasks.length),
+          tarefas: taskLines,
+        });
+
+        if (groupJid) {
           const fullMessage = `@${data.phone}\n${message}`;
-
           await fetch(`${baseUrl}/send/text`, {
             method: "POST",
             headers: {
@@ -121,25 +128,7 @@ export async function GET(request: NextRequest) {
               mentionedJid: [`${data.phone}@s.whatsapp.net`],
             }),
           }).catch(() => null);
-
-          sentCount++;
-        }
-      } else {
-        // ── Individual mode: send directly to each person's phone ──
-        for (const [, data] of byUser) {
-          if (!data.phone) continue;
-
-          const taskLines = data.tasks
-            .map((t) => `${PRIORITY_EMOJI[t.priority] ?? "•"} ${t.title}`)
-            .join("\n");
-
-          const message = applyTemplate(templateBody, {
-            nome: data.name.split(" ")[0],
-            data: todayFormatted,
-            qtd: String(data.tasks.length),
-            tarefas: taskLines,
-          });
-
+        } else {
           await fetch(`${baseUrl}/send/text`, {
             method: "POST",
             headers: {
@@ -148,21 +137,23 @@ export async function GET(request: NextRequest) {
             },
             body: JSON.stringify({ phone: data.phone, message }),
           }).catch(() => null);
-
-          sentCount++;
         }
+
+        sentCount++;
       }
     }
 
-    // Mark tasks as whatsappSent
     for (const task of dueTasks) {
-      await db
-        .update(kanbanTask)
-        .set({ whatsappSent: true })
-        .where(eq(kanbanTask.id, task.id));
+      await db.update(kanbanTask).set({ whatsappSent: true }).where(eq(kanbanTask.id, task.id));
     }
 
-    return NextResponse.json({ sent: sentCount, tasks: dueTasks.length, mode: groupJid ? "group" : "individual" });
+    return NextResponse.json({
+      sent: sentCount,
+      tasks: dueTasks.length,
+      tenants: byTenant.size,
+      skippedTenants,
+      mode: groupJid ? "group" : "individual",
+    });
   } catch (error) {
     console.error("[CRON] kanban-daily failed:", { operation: "daily_dispatch" });
     return NextResponse.json({ error: "Erro interno" }, { status: 500 });

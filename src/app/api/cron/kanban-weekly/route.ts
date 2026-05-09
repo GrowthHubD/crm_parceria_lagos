@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { kanbanTask } from "@/lib/db/schema/kanban";
 import { user } from "@/lib/db/schema/users";
 import { whatsappNumber } from "@/lib/db/schema/crm";
+import { tenant } from "@/lib/db/schema/tenants";
 import { contract } from "@/lib/db/schema/contracts";
 import { messageTemplate } from "@/lib/db/schema/settings";
 import { eq, and, gte, lte, ne } from "drizzle-orm";
@@ -43,6 +44,7 @@ export async function GET(request: NextRequest) {
     const weekTasks = await db
       .select({
         id: kanbanTask.id,
+        tenantId: kanbanTask.tenantId,
         title: kanbanTask.title,
         dueDate: kanbanTask.dueDate,
         priority: kanbanTask.priority,
@@ -60,12 +62,11 @@ export async function GET(request: NextRequest) {
         )
       );
 
-    const byUser = new Map<string, { name: string; phone: string | null; tasks: typeof weekTasks }>();
-    for (const task of weekTasks) {
-      if (!byUser.has(task.assignedTo)) {
-        byUser.set(task.assignedTo, { name: task.assigneeName, phone: task.assigneePhone, tasks: [] });
-      }
-      byUser.get(task.assignedTo)!.tasks.push(task);
+    // Agrupar por tenant primeiro — cada tenant usa seu próprio whatsapp
+    const tasksByTenant = new Map<string, typeof weekTasks>();
+    for (const t of weekTasks) {
+      if (!tasksByTenant.has(t.tenantId)) tasksByTenant.set(t.tenantId, []);
+      tasksByTenant.get(t.tenantId)!.push(t);
     }
 
     // ─── 2. Contract expiry alerts ────────────────────────────────
@@ -95,135 +96,131 @@ export async function GET(request: NextRequest) {
         .where(eq(contract.id, c.id));
     }
 
-    // ─── Fetch templates ──────────────────────────────────────────
-    let weeklyBody = DEFAULT_WEEKLY_TEMPLATE;
-    let contractBody = DEFAULT_CONTRACT_TEMPLATE;
-    try {
-      const templates = await db
-        .select({ id: messageTemplate.id, body: messageTemplate.body })
-        .from(messageTemplate)
-        .where(
-          eq(messageTemplate.id, "weekly_digest")
-        );
-      // Also fetch contract template separately
-      const [contractTmpl] = await db
-        .select({ body: messageTemplate.body })
-        .from(messageTemplate)
-        .where(eq(messageTemplate.id, "contract_alert"))
-        .limit(1);
-      const [weeklyTmpl] = await db
-        .select({ body: messageTemplate.body })
-        .from(messageTemplate)
-        .where(eq(messageTemplate.id, "weekly_digest"))
-        .limit(1);
-      if (weeklyTmpl) weeklyBody = weeklyTmpl.body;
-      if (contractTmpl) contractBody = contractTmpl.body;
-    } catch {
-      // Table may not exist yet — use defaults
-    }
-
     const baseUrl = process.env.UAZAPI_BASE_URL;
     const groupJid = process.env.REMINDER_GROUP_JID ?? "";
     const adminGroupJid = process.env.ADMIN_GROUP_JID ?? "";
 
-    const [wNum] = await db
-      .select()
-      .from(whatsappNumber)
-      .where(eq(whatsappNumber.isActive, true))
-      .limit(1);
-
     let kanbanSent = 0;
     let contractAlertSent = false;
+    const skippedTenants: string[] = [];
 
-    if (baseUrl && wNum) {
-      if (groupJid) {
-        // ── Group mode: @mention each user ──
-        for (const [, data] of byUser) {
-          if (!data.phone) continue;
+    // Por tenant: usa whatsapp_number + templates DAQUELE tenant
+    for (const [tenantId, tenantTasks] of tasksByTenant) {
+      const [wNum] = await db
+        .select()
+        .from(whatsappNumber)
+        .where(and(eq(whatsappNumber.tenantId, tenantId), eq(whatsappNumber.isActive, true)))
+        .limit(1);
 
-          const taskLines = data.tasks
-            .map((t) => {
-              const day = t.dueDate ? format(new Date(t.dueDate + "T12:00:00"), "EEE", { locale: ptBR }) : "";
-              return `${PRIORITY_EMOJI[t.priority] ?? "•"} [${day}] ${t.title}`;
-            })
-            .join("\n");
+      if (!baseUrl || !wNum) {
+        skippedTenants.push(tenantId);
+        continue;
+      }
 
-          const message = applyTemplate(weeklyBody, {
-            nome: data.name.split(" ")[0],
-            semana: weekRange,
-            qtd: String(data.tasks.length),
-            tarefas: taskLines,
-          });
+      let weeklyBody = DEFAULT_WEEKLY_TEMPLATE;
+      try {
+        const [weeklyTmpl] = await db
+          .select({ body: messageTemplate.body })
+          .from(messageTemplate)
+          .where(and(eq(messageTemplate.id, "weekly_digest"), eq(messageTemplate.tenantId, tenantId)))
+          .limit(1);
+        if (weeklyTmpl) weeklyBody = weeklyTmpl.body;
+      } catch { /* template ausente — fallback */ }
 
+      const byUser = new Map<string, { name: string; phone: string | null; tasks: typeof tenantTasks }>();
+      for (const task of tenantTasks) {
+        if (!byUser.has(task.assignedTo)) {
+          byUser.set(task.assignedTo, { name: task.assigneeName, phone: task.assigneePhone, tasks: [] });
+        }
+        byUser.get(task.assignedTo)!.tasks.push(task);
+      }
+
+      for (const [, data] of byUser) {
+        if (!data.phone) continue;
+
+        const taskLines = data.tasks
+          .map((t) => {
+            const day = t.dueDate ? format(new Date(t.dueDate + "T12:00:00"), "EEE", { locale: ptBR }) : "";
+            return `${PRIORITY_EMOJI[t.priority] ?? "•"} [${day}] ${t.title}`;
+          })
+          .join("\n");
+
+        const message = applyTemplate(weeklyBody, {
+          nome: data.name.split(" ")[0],
+          semana: weekRange,
+          qtd: String(data.tasks.length),
+          tarefas: taskLines,
+        });
+
+        if (groupJid) {
           await fetch(`${baseUrl}/send/text`, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${wNum.uazapiToken}`,
-            },
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${wNum.uazapiToken}` },
             body: JSON.stringify({
               phone: groupJid,
               message: `@${data.phone}\n${message}`,
               mentionedJid: [`${data.phone}@s.whatsapp.net`],
             }),
           }).catch(() => null);
-
-          kanbanSent++;
+        } else {
+          await fetch(`${baseUrl}/send/text`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${wNum.uazapiToken}` },
+            body: JSON.stringify({ phone: data.phone, message }),
+          }).catch(() => null);
         }
-      } else {
-        // ── Individual mode ──
-        for (const [, data] of byUser) {
-          if (!data.phone) continue;
 
-          const taskLines = data.tasks
-            .map((t) => {
-              const day = t.dueDate ? format(new Date(t.dueDate + "T12:00:00"), "EEE", { locale: ptBR }) : "";
-              return `${PRIORITY_EMOJI[t.priority] ?? "•"} [${day}] ${t.title}`;
-            })
+        kanbanSent++;
+      }
+    }
+
+    // Contract alerts → grupo admin, usando whatsapp do tenant platform_owner (GH)
+    if (expiringContracts.length > 0 && adminGroupJid && baseUrl) {
+      const [ownerTenant] = await db
+        .select({ id: tenant.id })
+        .from(tenant)
+        .where(eq(tenant.isPlatformOwner, true))
+        .limit(1);
+
+      if (ownerTenant) {
+        const [ownerWNum] = await db
+          .select()
+          .from(whatsappNumber)
+          .where(and(eq(whatsappNumber.tenantId, ownerTenant.id), eq(whatsappNumber.isActive, true)))
+          .limit(1);
+
+        if (ownerWNum) {
+          let contractBody = DEFAULT_CONTRACT_TEMPLATE;
+          try {
+            const [contractTmpl] = await db
+              .select({ body: messageTemplate.body })
+              .from(messageTemplate)
+              .where(and(eq(messageTemplate.id, "contract_alert"), eq(messageTemplate.tenantId, ownerTenant.id)))
+              .limit(1);
+            if (contractTmpl) contractBody = contractTmpl.body;
+          } catch { /* fallback */ }
+
+          const contractLines = expiringContracts
+            .map((c) => `• ${c.companyName} — vence ${c.endDate ? format(new Date(c.endDate + "T12:00:00"), "dd/MM/yyyy") : "?"}`)
             .join("\n");
 
-          const message = applyTemplate(weeklyBody, {
-            nome: data.name.split(" ")[0],
-            semana: weekRange,
-            qtd: String(data.tasks.length),
-            tarefas: taskLines,
+          const message = applyTemplate(contractBody, {
+            qtd: String(expiringContracts.length),
+            contratos: contractLines,
           });
 
           await fetch(`${baseUrl}/send/text`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Authorization": `Bearer ${wNum.uazapiToken}`,
+              "SessionKey": ownerWNum.uazapiSession,
+              "Token": ownerWNum.uazapiToken,
             },
-            body: JSON.stringify({ phone: data.phone, message }),
+            body: JSON.stringify({ phone: adminGroupJid, message }),
           }).catch(() => null);
 
-          kanbanSent++;
+          contractAlertSent = true;
         }
-      }
-
-      // ── Contract alerts → admin group ──
-      if (expiringContracts.length > 0 && adminGroupJid) {
-        const contractLines = expiringContracts
-          .map((c) => `• ${c.companyName} — vence ${c.endDate ? format(new Date(c.endDate + "T12:00:00"), "dd/MM/yyyy") : "?"}`)
-          .join("\n");
-
-        const message = applyTemplate(contractBody, {
-          qtd: String(expiringContracts.length),
-          contratos: contractLines,
-        });
-
-        await fetch(`${baseUrl}/send/text`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "SessionKey": wNum.uazapiSession,
-            "Token": wNum.uazapiToken,
-          },
-          body: JSON.stringify({ phone: adminGroupJid, message }),
-        }).catch(() => null);
-
-        contractAlertSent = true;
       }
     }
 
@@ -231,6 +228,8 @@ export async function GET(request: NextRequest) {
       kanbanSent,
       contractAlerts: expiringContracts.length,
       contractAlertSent,
+      tenants: tasksByTenant.size,
+      skippedTenants,
       mode: groupJid ? "group" : "individual",
     });
   } catch {

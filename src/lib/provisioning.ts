@@ -15,6 +15,8 @@ import { tenant } from "./db/schema/tenants";
 import { user, userTenant } from "./db/schema/users";
 import { whatsappNumber } from "./db/schema/crm";
 import { pipeline, pipelineStage } from "./db/schema/pipeline";
+import { kanbanColumn } from "./db/schema/kanban";
+import { messageTemplate } from "./db/schema/settings";
 import { createInstance, instanceIdFromSlug } from "./whatsapp";
 import { getSupabaseAdmin } from "./supabase/admin";
 import { eq } from "drizzle-orm";
@@ -58,6 +60,42 @@ const DEFAULT_STAGES = [
   { name: "Negociação", order: 2, color: "#F59E0B", isWon: false },
   { name: "Ganho", order: 3, color: "#10B981", isWon: true },
   { name: "Perdido", order: 4, color: "#EF4444", isWon: false },
+];
+
+const DEFAULT_KANBAN_COLUMNS = [
+  { name: "Backlog", order: 0, color: "#6B7280" },
+  { name: "A fazer", order: 1, color: "#3B82F6" },
+  { name: "Em andamento", order: 2, color: "#F59E0B" },
+  { name: "Em revisão", order: 3, color: "#8B5CF6" },
+  { name: "Concluído", order: 4, color: "#10B981" },
+];
+
+const DEFAULT_TEMPLATES = [
+  {
+    id: "welcome",
+    label: "Boas-vindas",
+    body: "Olá {{nome}}! Obrigado pelo contato. Em breve nossa equipe responderá.",
+  },
+  {
+    id: "follow_up",
+    label: "Follow-up",
+    body: "Oi {{nome}}, tudo bem? Notamos que você não retornou. Posso te ajudar com algo?",
+  },
+  {
+    id: "daily_reminder",
+    label: "Lembrete diário de tarefas",
+    body: "📋 *Tarefas de hoje, {{data}}*\n\nOlá, {{nome}}! Você tem {{qtd}} tarefa(s) para hoje:\n\n{{tarefas}}",
+  },
+  {
+    id: "weekly_digest",
+    label: "Resumo semanal",
+    body: "📅 *Resumo da semana ({{semana}})*\n\nOlá, {{nome}}! Você tem {{qtd}} tarefa(s) essa semana:\n\n{{tarefas}}",
+  },
+  {
+    id: "contract_alert",
+    label: "Alerta de contrato vencendo",
+    body: "⚠️ *{{qtd}} contrato(s) a vencer em 30 dias:*\n\n{{contratos}}",
+  },
 ];
 
 function normalizeSlug(raw: string): string {
@@ -161,6 +199,29 @@ export async function provisionClient(
       isWon: s.isWon,
     }))
   );
+
+  // 6.1) Cria colunas kanban default — tenant nasce com workspace funcional
+  await db.insert(kanbanColumn).values(
+    DEFAULT_KANBAN_COLUMNS.map((c) => ({
+      tenantId: newTenant.id,
+      name: c.name,
+      order: c.order,
+      color: c.color,
+    }))
+  );
+
+  // 6.2) Cria templates de mensagem default — disponíveis pra automações futuras
+  await db
+    .insert(messageTemplate)
+    .values(
+      DEFAULT_TEMPLATES.map((t) => ({
+        id: t.id,
+        tenantId: newTenant.id,
+        label: t.label,
+        body: t.body,
+      }))
+    )
+    .onConflictDoNothing();
 
   // 7) (Opcional) Cria user admin do cliente + magic link
   let adminUserId: string | undefined;
