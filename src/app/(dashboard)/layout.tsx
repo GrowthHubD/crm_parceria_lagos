@@ -5,17 +5,19 @@ import { useRouter } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
 import { DashboardShell } from "@/components/layout/dashboard-shell";
 import { Loader2 } from "lucide-react";
-import type { SystemModule, UserRole } from "@/types";
+import type { AvailableTenant, SystemModule, UserRole } from "@/types";
 
 const isDev = process.env.NODE_ENV === "development";
 
 interface TenantContext {
+  tenantId: string;
   isPlatformOwner: boolean;
   tenantSlug: string;
   role: string;
   modules: SystemModule[];
   userName: string;
   userImage: string | null;
+  availableTenants?: AvailableTenant[];
 }
 
 export default function DashboardLayout({
@@ -137,9 +139,11 @@ export default function DashboardLayout({
       allowedModules={tenantCtx.modules}
       isPlatformOwner={tenantCtx.isPlatformOwner}
       tenantSlug={tenantCtx.tenantSlug}
+      tenantId={tenantCtx.tenantId}
       userName={tenantCtx.userName}
       userImage={tenantCtx.userImage}
       userRole={tenantCtx.role as UserRole}
+      availableTenants={tenantCtx.availableTenants}
     >
       {children}
     </DashboardShell>

@@ -3,25 +3,30 @@
 import { useState } from "react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
-import type { SystemModule, UserRole } from "@/types";
+import type { AvailableTenant, SystemModule, UserRole } from "@/types";
 
 interface DashboardShellProps {
   children: React.ReactNode;
   allowedModules: SystemModule[];
   isPlatformOwner: boolean;
   tenantSlug: string;
+  tenantId?: string;
   userName: string;
   userImage?: string | null;
   userRole: UserRole;
+  availableTenants?: AvailableTenant[];
 }
 
 export function DashboardShell({
   children,
   allowedModules,
   isPlatformOwner,
+  tenantSlug,
+  tenantId,
   userName,
   userImage,
   userRole,
+  availableTenants,
 }: DashboardShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -46,6 +51,9 @@ export function DashboardShell({
         isPlatformOwner={isPlatformOwner}
         userName={userName}
         userRole={userRole}
+        tenantSlug={tenantSlug}
+        tenantId={tenantId}
+        availableTenants={availableTenants}
       />
 
       {/* Main content */}

@@ -176,6 +176,53 @@ export async function GET(_request: NextRequest) {
     );
   }
 
+  // 5) Lista de tenants acessíveis pelo user (pra Tenant Switcher)
+  //    - superadmin: todos
+  //    - partner_admin: home + sub-clientes (partner_id = home)
+  //    - demais: só os tenants em user_tenant
+  type AvailableTenantRow = {
+    id: string;
+    slug: string;
+    is_platform_owner: boolean;
+    is_partner: boolean;
+  };
+  let availableTenantsRaw: AvailableTenantRow[] = [];
+
+  const isSuperadmin = validRows.some((r) => r.role === "superadmin");
+  const partnerHomeTenantId =
+    validRows.find((r) => r.role === "partner_admin")?.tenant?.id ?? null;
+
+  if (isSuperadmin) {
+    const { data } = await admin
+      .from("tenant")
+      .select("id, slug, is_platform_owner, is_partner")
+      .order("slug");
+    availableTenantsRaw = (data ?? []) as AvailableTenantRow[];
+  } else if (partnerHomeTenantId) {
+    const { data } = await admin
+      .from("tenant")
+      .select("id, slug, is_platform_owner, is_partner")
+      .or(`id.eq.${partnerHomeTenantId},partner_id.eq.${partnerHomeTenantId}`)
+      .order("slug");
+    availableTenantsRaw = (data ?? []) as AvailableTenantRow[];
+  } else {
+    availableTenantsRaw = validRows
+      .map((r) => r.tenant!)
+      .map((t) => ({
+        id: t.id,
+        slug: t.slug,
+        is_platform_owner: t.is_platform_owner,
+        is_partner: t.is_partner,
+      }));
+  }
+
+  const availableTenants = availableTenantsRaw.map((r) => ({
+    id: r.id,
+    slug: r.slug,
+    isPlatformOwner: r.is_platform_owner,
+    isPartner: r.is_partner,
+  }));
+
   return NextResponse.json({
     tenantId: t.id,
     tenantSlug: t.slug,
@@ -185,5 +232,6 @@ export async function GET(_request: NextRequest) {
     modules,
     userName: userRow.name,
     userImage: userRow.image ?? null,
+    availableTenants,
   });
 }

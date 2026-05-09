@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Loader2, CheckCircle2, Phone, QrCode, KeyRound, Link2, Copy, ChevronDown, AlertTriangle } from "lucide-react";
+import { Plus, Loader2, CheckCircle2, Phone, QrCode, KeyRound, Link2, Copy, ChevronDown, AlertTriangle, LogIn } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 
 export interface PartnerClient {
@@ -106,6 +106,34 @@ export function PartnerClientsManager({ initialClients }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [expandedClient, setExpandedClient] = useState<string | null>(null);
   const [accessState, setAccessState] = useState<Record<string, AccessState>>({});
+  const [switchingClientId, setSwitchingClientId] = useState<string | null>(null);
+
+  async function handleSwitchToTenant(clientId: string) {
+    setSwitchingClientId(clientId);
+    try {
+      const res = await fetch("/api/tenant/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId: clientId }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(`Falha ao trocar tenant: ${body?.error ?? res.status}`);
+        setSwitchingClientId(null);
+        return;
+      }
+      try {
+        for (let i = sessionStorage.length - 1; i >= 0; i--) {
+          const k = sessionStorage.key(i);
+          if (k?.startsWith("tenant-ctx:")) sessionStorage.removeItem(k);
+        }
+      } catch { /* ignore */ }
+      window.location.href = "/";
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Falha de rede");
+      setSwitchingClientId(null);
+    }
+  }
 
   function toggleExpanded(clientId: string) {
     setExpandedClient((cur) => (cur === clientId ? null : clientId));
@@ -574,6 +602,22 @@ export function PartnerClientsManager({ initialClients }: Props) {
                           Sem admin associado — cliente provavelmente foi criado sem email.
                         </p>
                       )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => handleSwitchToTenant(c.id)}
+                        disabled={switchingClientId === c.id}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs disabled:opacity-50 hover:opacity-90"
+                        title="Entrar no dashboard deste cliente como você mesmo"
+                      >
+                        {switchingClientId === c.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <LogIn className="w-3 h-3" />
+                        )}
+                        Acessar como cliente
+                      </button>
                     </div>
 
                     {c.adminEmail && (

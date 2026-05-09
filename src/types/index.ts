@@ -99,6 +99,16 @@ export type NotificationType =
 export type BlogPostType = "list" | "article" | "guide" | "study";
 
 /**
+ * Tenant disponível pra o user trocar via Tenant Switcher.
+ */
+export interface AvailableTenant {
+  id: string;
+  slug: string;
+  isPlatformOwner: boolean;
+  isPartner: boolean;
+}
+
+/**
  * Sidebar navigation item definition
  */
 export interface NavItem {

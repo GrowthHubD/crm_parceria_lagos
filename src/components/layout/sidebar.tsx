@@ -25,7 +25,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiSound } from "@/hooks/use-ui-sound";
-import type { SystemModule, UserRole } from "@/types";
+import { TenantSwitcher } from "@/components/layout/tenant-switcher";
+import type { AvailableTenant, SystemModule, UserRole } from "@/types";
 
 interface NavItem {
   title: string;
@@ -43,6 +44,9 @@ interface SidebarProps {
   isPlatformOwner: boolean;
   userName: string;
   userRole: UserRole;
+  tenantSlug?: string;
+  tenantId?: string;
+  availableTenants?: AvailableTenant[];
 }
 
 // Módulos CRM (visíveis para todos os tenants)
@@ -97,6 +101,8 @@ export function Sidebar({
   isPlatformOwner,
   userName,
   userRole,
+  tenantId,
+  availableTenants,
 }: SidebarProps) {
   const pathname = usePathname();
   const { playSound } = useUiSound();
@@ -191,6 +197,15 @@ export function Sidebar({
           <X className="w-5 h-5" />
         </button>
       </div>
+
+      {/* Tenant Switcher (somente quando user tem acesso a >1 tenant) */}
+      {availableTenants && availableTenants.length > 1 && tenantId && (
+        <TenantSwitcher
+          tenants={availableTenants}
+          currentTenantId={tenantId}
+          collapsed={collapsed}
+        />
+      )}
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-2 px-2">

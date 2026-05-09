@@ -3,6 +3,7 @@ import { auth } from "./auth";
 import { db } from "./db";
 import { user, userTenant } from "./db/schema/users";
 import { tenant } from "./db/schema/tenants";
+import { readOverrideCookie, verifyOverride } from "./tenant-override";
 import type { ReadonlyHeaders } from "next/dist/server/web/spec-extension/adapters/headers";
 
 type CfCtx = { env?: { AUTH_CACHE?: { get(k: string): Promise<string | null>; put(k: string, v: string, o?: { expirationTtl?: number }): Promise<void> } } };
@@ -113,7 +114,16 @@ export async function getTenantContext(
 
   if (!session) throw new Error("UNAUTHENTICATED");
 
-  const tenantOverride = headers.get("x-tenant-id");
+  // Cookie override tem precedência sobre header. Cookie é httpOnly assinado
+  // (signOverride/verifyOverride em ./tenant-override) e acompanha todo fetch
+  // automaticamente — assim a UI de Tenant Switcher não precisa modificar 25+
+  // routes que já lêem getTenantContext.
+  let tenantOverride = headers.get("x-tenant-id");
+  const cookieToken = readOverrideCookie(headers.get("cookie"));
+  if (cookieToken) {
+    const verified = await verifyOverride(cookieToken, session.user.id);
+    if (verified) tenantOverride = verified.tenantId;
+  }
 
   // Cache só vale para o lookup default (sem override). Override é dinâmico
   // por request — cachear ele faria com que a próxima request retornasse o
