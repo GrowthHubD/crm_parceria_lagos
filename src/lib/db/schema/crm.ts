@@ -25,6 +25,9 @@ export const whatsappNumber = pgTable("whatsapp_number", {
   // Baileys auth — session state armazenado em baileys_auth_state
   uazapiSession: text("uazapi_session").notNull().default("baileys"), // legacy compat
   uazapiToken: text("uazapi_token").notNull().default("baileys"),     // legacy compat
+  // Server Uazapi específico desta instância. NULL = usa env UAZAPI_BASE_URL.
+  // Permite tenants em servidores Uazapi diferentes (white-label, multi-region).
+  serverUrl: text("server_url"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

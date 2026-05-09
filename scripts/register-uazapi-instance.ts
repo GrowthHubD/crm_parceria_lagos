@@ -13,10 +13,10 @@ const GH = "00000000-0000-0000-0000-000000000001";
 
 // Dados da instância existente (vindos do painel Uazapi)
 const INSTANCE = {
-  name: "horizoniabotsmorolanumber",
-  token: "e88c26aa-583f-4402-a2e9-7e612613af53",
+  name: "r9a6322ece80058",
+  token: "4a23173f-15db-4223-8a09-8f1d2db695a2",
   phone: "5521999433160",
-  serverUrl: "https://williphone.uazapi.com",
+  serverUrl: "https://growthhub.uazapi.com",
 };
 
 async function main() {
@@ -48,6 +48,7 @@ async function main() {
           label = ${"Uazapi prod"},
           uazapi_session = ${INSTANCE.name},
           uazapi_token = ${INSTANCE.token},
+          server_url = ${INSTANCE.serverUrl},
           is_active = true
       WHERE id = ${existing[0].id}
     `;
@@ -55,9 +56,9 @@ async function main() {
   } else {
     const [created] = await sql<{ id: string }[]>`
       INSERT INTO public.whatsapp_number
-        (tenant_id, label, phone_number, uazapi_session, uazapi_token, is_active)
+        (tenant_id, label, phone_number, uazapi_session, uazapi_token, server_url, is_active)
       VALUES
-        (${GH}, ${"Uazapi prod"}, ${INSTANCE.phone}, ${INSTANCE.name}, ${INSTANCE.token}, true)
+        (${GH}, ${"Uazapi prod"}, ${INSTANCE.phone}, ${INSTANCE.name}, ${INSTANCE.token}, ${INSTANCE.serverUrl}, true)
       RETURNING id
     `;
     console.log(`✓ wn criado ${created.id}`);

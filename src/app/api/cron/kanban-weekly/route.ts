@@ -96,7 +96,7 @@ export async function GET(request: NextRequest) {
         .where(eq(contract.id, c.id));
     }
 
-    const baseUrl = process.env.UAZAPI_BASE_URL;
+    const fallbackBaseUrl = process.env.UAZAPI_BASE_URL;
     const groupJid = process.env.REMINDER_GROUP_JID ?? "";
     const adminGroupJid = process.env.ADMIN_GROUP_JID ?? "";
 
@@ -111,6 +111,9 @@ export async function GET(request: NextRequest) {
         .from(whatsappNumber)
         .where(and(eq(whatsappNumber.tenantId, tenantId), eq(whatsappNumber.isActive, true)))
         .limit(1);
+
+      // Server URL da row do tenant — fallback pro env
+      const baseUrl = wNum?.serverUrl || fallbackBaseUrl;
 
       if (!baseUrl || !wNum) {
         skippedTenants.push(tenantId);
@@ -175,7 +178,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Contract alerts → grupo admin, usando whatsapp do tenant platform_owner (GH)
-    if (expiringContracts.length > 0 && adminGroupJid && baseUrl) {
+    if (expiringContracts.length > 0 && adminGroupJid) {
       const [ownerTenant] = await db
         .select({ id: tenant.id })
         .from(tenant)
@@ -189,7 +192,8 @@ export async function GET(request: NextRequest) {
           .where(and(eq(whatsappNumber.tenantId, ownerTenant.id), eq(whatsappNumber.isActive, true)))
           .limit(1);
 
-        if (ownerWNum) {
+        const ownerBaseUrl = ownerWNum?.serverUrl || fallbackBaseUrl;
+        if (ownerWNum && ownerBaseUrl) {
           let contractBody = DEFAULT_CONTRACT_TEMPLATE;
           try {
             const [contractTmpl] = await db
@@ -209,7 +213,7 @@ export async function GET(request: NextRequest) {
             contratos: contractLines,
           });
 
-          await fetch(`${baseUrl}/send/text`, {
+          await fetch(`${ownerBaseUrl}/send/text`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

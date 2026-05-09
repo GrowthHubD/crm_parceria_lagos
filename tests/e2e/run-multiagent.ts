@@ -18,6 +18,8 @@
  *   SUPABASE_SERVICE_ROLE_KEY=...
  */
 import "dotenv/config";
+import { config as dotenvConfig } from "dotenv";
+dotenvConfig({ path: ".env.local", override: true });
 import { loadEnv, type ScenarioResult } from "../fixtures/test-helpers";
 import {
   scenarioA,
@@ -28,6 +30,7 @@ import {
   scenarioF,
   scenarioG,
   scenarioI,
+  scenarioJ,
   scenarioH_cleanup,
 } from "./scenarios";
 
@@ -54,13 +57,21 @@ const ALL_SCENARIOS = [
   { id: "F", fn: scenarioF },
   { id: "G", fn: scenarioG },
   { id: "I", fn: scenarioI },
+  // J = live cross-tenant follow-up (envia msgs reais; só roda explicitamente
+  // via --only=J pra evitar disparar nos números toda execução da suite).
+  { id: "J", fn: scenarioJ },
 ];
 
 async function main() {
   const args = parseArgs();
   const env = loadEnv();
 
-  const selected = ALL_SCENARIOS.filter((s) => !args.only || args.only.includes(s.id));
+  // J é opt-in: dispara WhatsApp real, custa créditos Uazapi e ping nos números.
+  // Só entra na seleção quando o usuário pediu explicitamente via --only.
+  const selected = ALL_SCENARIOS.filter((s) => {
+    if (args.only) return args.only.includes(s.id);
+    return s.id !== "J";
+  });
 
   console.log("━".repeat(72));
   console.log(`E2E Multi-Agent Suite`);

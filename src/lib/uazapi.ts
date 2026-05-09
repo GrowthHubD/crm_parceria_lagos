@@ -36,9 +36,11 @@ async function req<T>(
   path: string,
   init?: RequestInit,
   token?: string,
-  useAdmin = false
+  useAdmin = false,
+  serverUrl?: string
 ): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const base = (serverUrl ?? BASE).replace(/\/$/, "");
+  const res = await fetch(`${base}${path}`, {
     ...init,
     headers: { ...authHeaders(token, useAdmin), ...(init?.headers ?? {}) },
   });
@@ -231,7 +233,8 @@ export async function uazapiSendText(
   _instanceId: string,
   instanceToken: string | undefined,
   phone: string,
-  message: string
+  message: string,
+  serverUrl?: string
 ): Promise<UazapiSendResult> {
   // Uazapi v2 espera `{ number, text }` no body. A instância é identificada
   // pelo header `token:` (instanceToken), não pelo body.
@@ -244,7 +247,9 @@ export async function uazapiSendText(
         text: message,
       }),
     },
-    instanceToken
+    instanceToken,
+    false,
+    serverUrl
   );
 }
 
@@ -259,7 +264,8 @@ export async function uazapiSendImage(
   instanceToken: string | undefined,
   phone: string,
   image: string,
-  caption?: string
+  caption?: string,
+  serverUrl?: string
 ): Promise<UazapiSendResult> {
   return req<UazapiSendResult>(
     "/send/media",
@@ -272,7 +278,9 @@ export async function uazapiSendImage(
         ...(caption ? { text: caption } : {}),
       }),
     },
-    instanceToken
+    instanceToken,
+    false,
+    serverUrl
   );
 }
 
@@ -281,7 +289,8 @@ export async function uazapiSendVideo(
   instanceToken: string | undefined,
   phone: string,
   video: string,
-  caption?: string
+  caption?: string,
+  serverUrl?: string
 ): Promise<UazapiSendResult> {
   return req<UazapiSendResult>(
     "/send/media",
@@ -294,7 +303,9 @@ export async function uazapiSendVideo(
         ...(caption ? { text: caption } : {}),
       }),
     },
-    instanceToken
+    instanceToken,
+    false,
+    serverUrl
   );
 }
 
@@ -308,7 +319,8 @@ export async function uazapiSendAudio(
   instanceToken: string | undefined,
   phone: string,
   audio: string,
-  ptt = true
+  ptt = true,
+  serverUrl?: string
 ): Promise<UazapiSendResult> {
   return req<UazapiSendResult>(
     "/send/media",
@@ -320,7 +332,9 @@ export async function uazapiSendAudio(
         file: audio,
       }),
     },
-    instanceToken
+    instanceToken,
+    false,
+    serverUrl
   );
 }
 
@@ -329,7 +343,8 @@ export async function uazapiSendDocument(
   instanceToken: string | undefined,
   phone: string,
   document: string,
-  filename?: string
+  filename?: string,
+  serverUrl?: string
 ): Promise<UazapiSendResult> {
   return req<UazapiSendResult>(
     "/send/media",
@@ -342,7 +357,9 @@ export async function uazapiSendDocument(
         ...(filename ? { docName: filename } : {}),
       }),
     },
-    instanceToken
+    instanceToken,
+    false,
+    serverUrl
   );
 }
 
@@ -355,21 +372,22 @@ export async function uazapiSendMedia(
   phone: string,
   dataUriOrUrl: string,
   fileName?: string,
-  caption?: string
+  caption?: string,
+  serverUrl?: string
 ): Promise<UazapiSendResult> {
   const dataMatch = dataUriOrUrl.match(/^data:([^;]+);base64,/);
   const mime = dataMatch?.[1] ?? "";
 
   if (mime.startsWith("image/") || /\.(jpe?g|png|gif|webp)$/i.test(dataUriOrUrl)) {
-    return uazapiSendImage(instanceId, instanceToken, phone, dataUriOrUrl, caption);
+    return uazapiSendImage(instanceId, instanceToken, phone, dataUriOrUrl, caption, serverUrl);
   }
   if (mime.startsWith("video/") || /\.(mp4|mov|avi|mkv)$/i.test(dataUriOrUrl)) {
-    return uazapiSendVideo(instanceId, instanceToken, phone, dataUriOrUrl, caption);
+    return uazapiSendVideo(instanceId, instanceToken, phone, dataUriOrUrl, caption, serverUrl);
   }
   if (mime.startsWith("audio/") || /\.(mp3|ogg|opus|m4a|wav)$/i.test(dataUriOrUrl)) {
-    return uazapiSendAudio(instanceId, instanceToken, phone, dataUriOrUrl);
+    return uazapiSendAudio(instanceId, instanceToken, phone, dataUriOrUrl, true, serverUrl);
   }
-  return uazapiSendDocument(instanceId, instanceToken, phone, dataUriOrUrl, fileName);
+  return uazapiSendDocument(instanceId, instanceToken, phone, dataUriOrUrl, fileName, serverUrl);
 }
 
 // ── Helpers de domínio ────────────────────────────────────────────────
@@ -386,15 +404,18 @@ export function uazapiInstanceIdFromSlug(slug: string): string {
 }
 
 /**
- * Retorna (instanceId, token) do whatsappNumber ativo do tenant.
+ * Retorna (instanceId, token, serverUrl) do whatsappNumber ativo do tenant.
+ * `serverUrl` é null se a row não fixar servidor — chamadores devem usar
+ * `process.env.UAZAPI_BASE_URL` como fallback (ou deixar `req()` aplicar).
  */
 export async function getUazapiCredsForTenant(
   tenantId: string
-): Promise<{ instanceId: string; token: string | undefined } | null> {
+): Promise<{ instanceId: string; token: string | undefined; serverUrl: string | undefined } | null> {
   const [wNum] = await db
     .select({
       uazapiSession: whatsappNumber.uazapiSession,
       uazapiToken: whatsappNumber.uazapiToken,
+      serverUrl: whatsappNumber.serverUrl,
     })
     .from(whatsappNumber)
     .where(
@@ -406,11 +427,15 @@ export async function getUazapiCredsForTenant(
     .limit(1);
 
   if (!wNum?.uazapiSession) return null;
-  return { instanceId: wNum.uazapiSession, token: wNum.uazapiToken || undefined };
+  return {
+    instanceId: wNum.uazapiSession,
+    token: wNum.uazapiToken || undefined,
+    serverUrl: wNum.serverUrl || undefined,
+  };
 }
 
 /**
- * Retorna (instanceId, token, contactPhone, conversationId) por conversationId.
+ * Retorna (instanceId, token, serverUrl, contactPhone, conversationId) por conversationId.
  */
 export async function getUazapiCredsForConversation(conversationId: string) {
   const [row] = await db
@@ -420,6 +445,7 @@ export async function getUazapiCredsForConversation(conversationId: string) {
       tenantId: crmConversation.tenantId,
       instanceId: whatsappNumber.uazapiSession,
       token: whatsappNumber.uazapiToken,
+      serverUrl: whatsappNumber.serverUrl,
     })
     .from(crmConversation)
     .innerJoin(
@@ -433,6 +459,7 @@ export async function getUazapiCredsForConversation(conversationId: string) {
   return {
     instanceId: row.instanceId,
     token: row.token || undefined,
+    serverUrl: row.serverUrl || undefined,
     contactPhone: row.contactPhone,
     tenantId: row.tenantId,
     conversationId: row.conversationId,

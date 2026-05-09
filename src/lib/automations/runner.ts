@@ -578,6 +578,7 @@ export async function processPendingAutomations(
           .select({
             instanceId: whatsappNumber.uazapiSession,
             token: whatsappNumber.uazapiToken,
+            serverUrl: whatsappNumber.serverUrl,
           })
           .from(whatsappNumber)
           .where(
@@ -617,7 +618,9 @@ export async function processPendingAutomations(
             wNum!.instanceId,
             wNum!.token || undefined,
             target,
-            rendered
+            rendered,
+            undefined,
+            wNum!.serverUrl || undefined
           );
           if (result.error) {
             sendOk = false;

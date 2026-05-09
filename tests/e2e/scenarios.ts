@@ -383,6 +383,303 @@ export async function scenarioI(env: TestEnv): Promise<ScenarioResult> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// J. Live cross-tenant follow-up — 2 tenants, 2 instâncias Uazapi reais.
+//    Welcome + 2 follow-ups com delays diferentes em cada lado.
+//    Asserta JOIN crm_message → crm_conversation → whatsapp_number.tenant_id
+//    pra provar que cada msg saiu pelo whatsapp do tenant correto.
+//
+//    Pré-reqs (env):
+//      UAZ_A_TOKEN, UAZ_B_TOKEN  — tokens das duas instâncias Uazapi reais
+//      CRON_SECRET               — pra disparar /api/cron/follow-up
+//    Defaults (opcionais):
+//      UAZ_SERVER_URL            — server Uazapi (default https://growthhub.uazapi.com)
+//      UAZ_A_PHONE, UAZ_B_PHONE  — números das instâncias (default reais)
+//      UAZ_A_SESSION, UAZ_B_SESSION — instance ids
+// ─────────────────────────────────────────────────────────────────────────────
+export async function scenarioJ(env: TestEnv): Promise<ScenarioResult> {
+  return runScenario("J:cross-tenant-followup-live", async () => {
+    const UAZ_A_TOKEN = process.env.UAZ_A_TOKEN ?? "";
+    const UAZ_B_TOKEN = process.env.UAZ_B_TOKEN ?? "";
+    if (!UAZ_A_TOKEN || !UAZ_B_TOKEN) {
+      return {
+        ok: false,
+        errors: ["Faltam UAZ_A_TOKEN / UAZ_B_TOKEN no env (tokens reais Uazapi pra cross-test)"],
+      };
+    }
+    if (!process.env.DATABASE_URL && !process.env.DIRECT_URL) {
+      return { ok: false, errors: ["DATABASE_URL ausente — runner local precisa pra rodar"] };
+    }
+    // Força provider Uazapi e desliga dry-run pra envios reais
+    process.env.WHATSAPP_PROVIDER = "uazapi";
+    process.env.AUTOMATION_DRY_RUN = "false";
+    if (!process.env.DATABASE_URL && process.env.DIRECT_URL) {
+      process.env.DATABASE_URL = process.env.DIRECT_URL;
+    }
+
+    const SERVER = process.env.UAZ_SERVER_URL ?? "https://growthhub.uazapi.com";
+    const PHONE_A = process.env.UAZ_A_PHONE ?? "5521999433160";
+    const PHONE_B = process.env.UAZ_B_PHONE ?? "5521978477520";
+    const SESSION_A = process.env.UAZ_A_SESSION ?? "r9a6322ece80058";
+    const SESSION_B = process.env.UAZ_B_SESSION ?? "rcad9874669dd20";
+
+    const { createClient } = await import("@supabase/supabase-js");
+    const sb = createClient(env.supabaseUrl, env.supabaseServiceKey);
+
+    const partner = await loginAs(env, env.partnerEmail, env.partnerPassword);
+    const idsA = testIds(env, "j-iso-a");
+    const idsB = testIds(env, "j-iso-b");
+    const nonce = env.nonce;
+
+    // 1. Cria 2 tenants
+    const cA = await createClient_(env, partner.cookieHeader, {
+      name: idsA.name,
+      slug: idsA.slug,
+      adminEmail: idsA.adminEmail,
+      adminName: idsA.adminName,
+      adminPassword: idsA.adminPassword,
+      plan: "pro",
+    });
+    if (cA.status !== 201) {
+      return { ok: false, errors: [`Create A falhou: ${cA.status} ${JSON.stringify(cA.body)}`] };
+    }
+    const tenantA = (cA.body as { client?: { tenantId?: string } }).client?.tenantId;
+    if (!tenantA) return { ok: false, errors: ["Sem tenantA"] };
+
+    const cB = await createClient_(env, partner.cookieHeader, {
+      name: idsB.name,
+      slug: idsB.slug,
+      adminEmail: idsB.adminEmail,
+      adminName: idsB.adminName,
+      adminPassword: idsB.adminPassword,
+      plan: "pro",
+    });
+    if (cB.status !== 201) {
+      return { ok: false, errors: [`Create B falhou: ${cB.status} ${JSON.stringify(cB.body)}`] };
+    }
+    const tenantB = (cB.body as { client?: { tenantId?: string } }).client?.tenantId;
+    if (!tenantB) return { ok: false, errors: ["Sem tenantB"] };
+
+    // 2. Reescreve whatsapp_number "pending" criado pelo provisioning com creds reais
+    const updateWn = async (tenantId: string, phone: string, label: string, session: string, token: string) => {
+      // tem que ficar com phone unique global → suffix com nonce
+      const phoneUnique = `${phone}-test-${nonce}`;
+      const { error } = await sb
+        .from("whatsapp_number")
+        .update({
+          phone_number: phoneUnique,
+          label,
+          uazapi_session: session,
+          uazapi_token: token,
+          server_url: SERVER,
+          is_active: true,
+        })
+        .eq("tenant_id", tenantId);
+      return error;
+    };
+    const eA = await updateWn(tenantA, PHONE_A, `Iso A ${nonce}`, SESSION_A, UAZ_A_TOKEN);
+    if (eA) return { ok: false, errors: [`Update wnA: ${eA.message}`] };
+    const eB = await updateWn(tenantB, PHONE_B, `Iso B ${nonce}`, SESSION_B, UAZ_B_TOKEN);
+    if (eB) return { ok: false, errors: [`Update wnB: ${eB.message}`] };
+
+    const { data: wnA } = await sb.from("whatsapp_number").select("id, uazapi_token").eq("tenant_id", tenantA).single();
+    const { data: wnB } = await sb.from("whatsapp_number").select("id, uazapi_token").eq("tenant_id", tenantB).single();
+    if (!wnA || !wnB) return { ok: false, errors: ["wn não encontrado após update"] };
+
+    // 3. Pega stage default de cada tenant
+    const stageOfTenant = async (tid: string) => {
+      const { data: pipe } = await sb.from("pipeline").select("id").eq("tenant_id", tid).limit(1).single();
+      if (!pipe) return null;
+      const { data: stages } = await sb.from("pipeline_stage").select("id").eq("pipeline_id", pipe.id).order("order", { ascending: true });
+      return stages?.[0]?.id ?? null;
+    };
+    const stageAId = await stageOfTenant(tenantA);
+    const stageBId = await stageOfTenant(tenantB);
+    if (!stageAId || !stageBId) return { ok: false, errors: ["Stage default ausente"] };
+
+    // 4. Cria conversation + lead em cada tenant (target = número do OUTRO tenant)
+    const mkLead = async (tenantId: string, wnId: string, stageId: string, contactPhone: string) => {
+      const { data: conv, error: cErr } = await sb
+        .from("crm_conversation")
+        .insert({
+          tenant_id: tenantId,
+          whatsapp_number_id: wnId,
+          contact_phone: contactPhone,
+          contact_name: `Test J ${nonce}`,
+          classification: "new",
+          is_group: false,
+        })
+        .select()
+        .single();
+      if (cErr || !conv) throw new Error(`conv: ${cErr?.message}`);
+      const { data: ld, error: lErr } = await sb
+        .from("lead")
+        .insert({
+          tenant_id: tenantId,
+          name: `Lead J ${nonce}`,
+          phone: contactPhone,
+          stage_id: stageId,
+          crm_conversation_id: conv.id,
+        })
+        .select()
+        .single();
+      if (lErr || !ld) throw new Error(`lead: ${lErr?.message}`);
+      return { convId: conv.id as string, leadId: ld.id as string };
+    };
+    const A = await mkLead(tenantA, wnA.id, stageAId, PHONE_B);
+    const B = await mkLead(tenantB, wnB.id, stageBId, PHONE_A);
+
+    // 5. Cria 3 automations em cada tenant: welcome + fu1 (1min) + fu2 (3min)
+    const specs = [
+      { name: "welcome", trigger: "first_message", cfg: {}, msg: `[J ${nonce}] welcome from {{nome}}` },
+      { name: "fu1", trigger: "lead_inactive", cfg: { inactiveMinutes: 1 }, msg: `[J ${nonce}] fu1 from {{nome}}` },
+      { name: "fu2", trigger: "lead_inactive", cfg: { inactiveMinutes: 3 }, msg: `[J ${nonce}] fu2 from {{nome}}` },
+    ];
+
+    const autosByTenant: Record<string, Array<{ id: string; trigger: string; stepId: string }>> = {};
+    for (const tenantId of [tenantA, tenantB]) {
+      autosByTenant[tenantId] = [];
+      for (const s of specs) {
+        const { data: auto, error: aErr } = await sb
+          .from("automation")
+          .insert({
+            tenant_id: tenantId,
+            name: `J ${s.name} ${nonce}`,
+            trigger_type: s.trigger,
+            trigger_config: s.cfg,
+            is_active: true,
+          })
+          .select()
+          .single();
+        if (aErr || !auto) return { ok: false, errors: [`automation: ${aErr?.message}`] };
+        const { data: step, error: sErr } = await sb
+          .from("automation_step")
+          .insert({
+            automation_id: auto.id,
+            order: 0,
+            type: "send_whatsapp",
+            config: { message: s.msg },
+          })
+          .select()
+          .single();
+        if (sErr || !step) return { ok: false, errors: [`step: ${sErr?.message}`] };
+        autosByTenant[tenantId].push({ id: auto.id, trigger: s.trigger, stepId: step.id });
+      }
+    }
+
+    // 6. Cria automation_log pendente pra welcome (simula trigger)
+    const insertWelcomeLog = async (tenantId: string, leadId: string) => {
+      const welcome = autosByTenant[tenantId].find((a) => a.trigger === "first_message");
+      if (!welcome) throw new Error("welcome auto missing");
+      const { error } = await sb.from("automation_log").insert({
+        automation_id: welcome.id,
+        lead_id: leadId,
+        step_id: welcome.stepId,
+        trigger_type: "first_message",
+        status: "pending",
+        scheduled_at: new Date().toISOString(),
+      });
+      if (error) throw new Error(`welcome log: ${error.message}`);
+    };
+    await insertWelcomeLog(tenantA, A.leadId);
+    await insertWelcomeLog(tenantB, B.leadId);
+
+    // 7. Marca lastOutgoingAt retroativo (4min atrás) pra ambos elegíveis aos lead_inactive
+    const fourMinAgo = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    await sb.from("crm_conversation").update({ last_outgoing_at: fourMinAgo, last_incoming_at: fiveMinAgo }).eq("id", A.convId);
+    await sb.from("crm_conversation").update({ last_outgoing_at: fourMinAgo, last_incoming_at: fiveMinAgo }).eq("id", B.convId);
+
+    // 8. Invoca runner LOCALMENTE (Node) ao invés de via cron deployado.
+    //    Razão: o test pode rodar antes do deploy do código novo (com serverUrl).
+    //    O runner local lê código atualizado deste repo e usa db.ts → DATABASE_URL.
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const runner = await import("../../src/lib/automations/runner");
+
+    const pings: Array<{ phase: string; result: unknown }> = [];
+
+    // Welcome: já tem log pendente → process
+    pings.push({ phase: "welcome", result: await runner.processPendingAutomations(50) });
+    await sleep(2000);
+
+    // Welcome atualiza lastOutgoingAt = now → reset retroativo pra fu1/fu2 elegíveis
+    const fourMinAgoAfter = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+    await sb.from("crm_conversation").update({ last_outgoing_at: fourMinAgoAfter }).eq("id", A.convId);
+    await sb.from("crm_conversation").update({ last_outgoing_at: fourMinAgoAfter }).eq("id", B.convId);
+
+    // Schedule lead_inactive (cadeia fu1 → fu2 baseada em lastOutgoingAt retroativo)
+    pings.push({ phase: "schedule1", result: await runner.scheduleInactiveLeadFollowups({}) });
+    pings.push({ phase: "fu1", result: await runner.processPendingAutomations(50) });
+    await sleep(2000);
+
+    // fu1 atualiza lastOutgoingAt? Não — runner pula update pra lead_inactive.
+    // Mas o uq_autolog_welcome bloqueia 1 log por (auto, lead) só pra first_message.
+    // Pra lead_inactive a cadeia avança step a step: fu1 sent → fu2 elegível.
+    pings.push({ phase: "schedule2", result: await runner.scheduleInactiveLeadFollowups({}) });
+    pings.push({ phase: "fu2", result: await runner.processPendingAutomations(50) });
+
+    // 9. Asserts: query as msgs criadas
+    const { data: msgs, error: mErr } = await sb
+      .from("crm_message")
+      .select("id, content, conversation_id, timestamp, direction")
+      .like("content", `[J ${nonce}]%`)
+      .order("timestamp", { ascending: true });
+
+    if (mErr) return { ok: false, errors: [`Query msgs: ${mErr.message}`] };
+    if (!msgs || msgs.length === 0) {
+      return { ok: false, errors: ["Nenhuma msg criada com prefixo do nonce"], details: { pings } };
+    }
+
+    // Map conv → tenant + token
+    const convTokens = new Map<string, { tenantId: string; token: string }>();
+    for (const convId of [A.convId, B.convId]) {
+      const { data: c } = await sb.from("crm_conversation").select("tenant_id, whatsapp_number_id").eq("id", convId).single();
+      if (!c) continue;
+      const { data: w } = await sb.from("whatsapp_number").select("tenant_id, uazapi_token").eq("id", c.whatsapp_number_id).single();
+      if (!w) continue;
+      convTokens.set(convId, { tenantId: w.tenant_id, token: w.uazapi_token });
+    }
+
+    const errors: string[] = [];
+    let countA = 0;
+    let countB = 0;
+    for (const m of msgs) {
+      const ct = convTokens.get(m.conversation_id);
+      if (!ct) {
+        errors.push(`msg ${m.id} sem conv mapeada`);
+        continue;
+      }
+      if (ct.tenantId === tenantA) {
+        if (ct.token !== UAZ_A_TOKEN) errors.push(`Tenant A msg saiu por token errado (${ct.token.slice(0, 8)}...)`);
+        countA++;
+      } else if (ct.tenantId === tenantB) {
+        if (ct.token !== UAZ_B_TOKEN) errors.push(`Tenant B msg saiu por token errado (${ct.token.slice(0, 8)}...)`);
+        countB++;
+      } else {
+        errors.push(`msg ${m.id} em tenant alheio (${ct.tenantId})`);
+      }
+    }
+
+    if (countA === 0) errors.push("Nenhuma msg saiu pelo Tenant A");
+    if (countB === 0) errors.push("Nenhuma msg saiu pelo Tenant B");
+
+    if (errors.length > 0) {
+      return { ok: false, errors, details: { msgs: msgs.length, countA, countB, pings } };
+    }
+
+    return {
+      ok: true,
+      details: {
+        totalMessages: msgs.length,
+        countA,
+        countB,
+        nonce,
+        sample: msgs.slice(0, 6).map((m) => m.content?.slice(0, 80)),
+      },
+    };
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // H. Cleanup: deleta todos test- via service role direto no DB
 // ─────────────────────────────────────────────────────────────────────────────
 export async function scenarioH_cleanup(env: TestEnv): Promise<ScenarioResult> {
@@ -402,15 +699,40 @@ export async function scenarioH_cleanup(env: TestEnv): Promise<ScenarioResult> {
     }
     const tenantIds = (tenants ?? []).map((t) => t.id);
     if (tenantIds.length > 0) {
+      // FKs transitivas: precisamos pegar IDs das pais antes pra limpar filhas
+      // que não têm tenant_id direto.
+      const { data: convs } = await sb
+        .from("crm_conversation")
+        .select("id")
+        .in("tenant_id", tenantIds);
+      const convIds = (convs ?? []).map((c: { id: string }) => c.id);
+      if (convIds.length > 0) {
+        await sb.from("crm_message").delete().in("conversation_id", convIds);
+      }
+      const { data: autos } = await sb
+        .from("automation")
+        .select("id")
+        .in("tenant_id", tenantIds);
+      const autoIds = (autos ?? []).map((a: { id: string }) => a.id);
+      if (autoIds.length > 0) {
+        await sb.from("automation_log").delete().in("automation_id", autoIds);
+        await sb.from("automation_step").delete().in("automation_id", autoIds);
+      }
+
       // Algumas FK apontando pra tenant não tem ON DELETE CASCADE.
-      // Limpa em ordem manual antes de deletar tenant.
+      // Limpa em ordem topológica antes de deletar tenant.
       const cleanupTables = [
-        "whatsapp_number",
+        "crm_conversation",
         "lead",
         "pipeline_stage",
         "pipeline",
         "automation",
+        "whatsapp_number",
         "task",
+        "kanban_task",
+        "kanban_column",
+        "message_template",
+        "notification",
       ];
       for (const tbl of cleanupTables) {
         await sb.from(tbl).delete().in("tenant_id", tenantIds);

@@ -180,12 +180,13 @@ export async function sendText(
   quoted?: {
     key: { id: string; remoteJid: string; fromMe: boolean };
     message: { conversation: string };
-  }
+  },
+  serverUrl?: string
 ): Promise<SendResult> {
   if (WHATSAPP_PROVIDER === "uazapi") {
     // Uazapi v2 não suporta quoted via API pública (ainda) — envia sem
     try {
-      const r = await uazapiSendText(instanceId, token, phone, text);
+      const r = await uazapiSendText(instanceId, token, phone, text, serverUrl);
       return { messageId: r.message_id, error: r.error };
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };
@@ -206,7 +207,8 @@ export async function sendMedia(
   phone: string,
   dataUri: string,
   fileName?: string,
-  caption?: string
+  caption?: string,
+  serverUrl?: string
 ): Promise<SendResult> {
   if (WHATSAPP_PROVIDER === "uazapi") {
     try {
@@ -216,7 +218,8 @@ export async function sendMedia(
         phone,
         dataUri,
         fileName,
-        caption
+        caption,
+        serverUrl
       );
       return { messageId: r.message_id, error: r.error };
     } catch (e) {

@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ sent: 0, message: "No tasks due today" });
     }
 
-    const baseUrl = process.env.UAZAPI_BASE_URL;
+    const fallbackBaseUrl = process.env.UAZAPI_BASE_URL;
     const groupJid = process.env.REMINDER_GROUP_JID ?? "";
 
     // Agrupar por tenant primeiro — cada tenant usa SEU próprio whatsapp_number
@@ -75,6 +75,9 @@ export async function GET(request: NextRequest) {
         .from(whatsappNumber)
         .where(and(eq(whatsappNumber.tenantId, tenantId), eq(whatsappNumber.isActive, true)))
         .limit(1);
+
+      // Server URL da própria row do tenant — fallback pro env
+      const baseUrl = wNum?.serverUrl || fallbackBaseUrl;
 
       if (!baseUrl || !wNum) {
         skippedTenants.push(tenantId);
