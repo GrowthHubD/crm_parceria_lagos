@@ -7,11 +7,6 @@ import { crmConversation, crmMessage, whatsappNumber } from "@/lib/db/schema/crm
 import { eq, and } from "drizzle-orm";
 import { sendMedia } from "@/lib/whatsapp";
 import { uploadWhatsappMedia } from "@/lib/supabase-storage";
-// ffmpeg só roda em Node runtime (não em Cloudflare Workers/edge). Em CF, o
-// import simplesmente não é resolvido e a conversão é pulada — áudio webm vai
-// sem conversão (vira documento no WhatsApp). Pra PTT em CF: refactor futuro
-// pra usar opus-recorder client-side (já instalado em deps + workers em /public/opus/).
-import { ensureOggDataUri } from "@/lib/audio-convert";
 import type { UserRole } from "@/types";
 
 const schema = z.object({
@@ -73,44 +68,37 @@ export async function POST(
     const isVideo = !isAudio && !isImage && mimetype.startsWith("video/");
     const mediaType = isAudio ? "audio" : isImage ? "image" : isVideo ? "video" : "document";
 
-    // Pra áudio: WhatsApp PTT (balão de voz) exige `audio/ogg; codecs=opus`
-    // re-encodado com bitrate 32k mono 48kHz. MediaRecorder do Chrome grava em
-    // webm/opus — usamos ffmpeg (libopus -b:a 32k -ar 48000 -ac 1 -f ogg).
-    // Em vez de mandar como data URI, subimos o ogg pro Storage e mandamos a
-    // URL pública pra Uazapi — esse é o formato que Baileys/Uazapi reconhecem
-    // confiavelmente como PTT.
-    let fileForSend: string = file;
-    let fileNameForSend = fileName;
-    let mediaUrlStored: string | null = null;
-
-    if (isAudio && (mimetype.includes("webm") || mimetype.includes("opus"))) {
-      try {
-        const oggDataUri = await ensureOggDataUri(file);
-        fileNameForSend = fileName ? fileName.replace(/\.(webm|opus)$/i, ".ogg") : "audio.ogg";
-
-        // Sobe o OGG convertido pro Storage e usa a URL pública no envio.
-        // Uazapi parece preferir URL pública sobre data URI pra detectar PTT.
-        const uploadedOgg = await uploadWhatsappMedia({
-          tenantId: ctx.tenantId,
-          conversationId: id,
-          data: oggDataUri,
-          mimetype: "audio/ogg",
-          filename: fileNameForSend,
-        });
-
-        if (uploadedOgg?.publicUrl) {
-          fileForSend = uploadedOgg.publicUrl;
-          mediaUrlStored = uploadedOgg.publicUrl;
-        } else {
-          fileForSend = oggDataUri; // fallback: data URI
-        }
-      } catch (e) {
-        console.warn("[send-media] audio convert falhou, enviando original:", e);
+    // Pra áudio: WhatsApp PTT (balão de voz) exige container OGG + codec libopus.
+    // Cliente (AudioRecorder) grava direto em OGG/opus via opus-recorder — não
+    // precisamos converter aqui. Se vier outro formato (webm), rejeitamos pra
+    // não etiquetar mentirosamente como audio/ogg no Storage.
+    if (isAudio) {
+      const isOgg = mimetype.includes("ogg") || mimetype.includes("opus");
+      if (!isOgg) {
+        return NextResponse.json(
+          { error: `Áudio precisa estar em audio/ogg (codecs=opus). Recebido: ${mimetype}` },
+          { status: 400 }
+        );
       }
     }
 
-    // 1) Envia pro WhatsApp via facade (provider decide: Evolution dev / Uazapi prod)
+    // Sobe a mídia pro Storage. Pra áudio, normaliza o mime pra "audio/ogg"
+    // (sem o parâmetro `codecs=opus`) pra bater com a allowlist do bucket.
+    const storageMime = isAudio ? "audio/ogg" : mimetype;
+    const uploaded = await uploadWhatsappMedia({
+      tenantId: ctx.tenantId,
+      conversationId: id,
+      data: file,
+      mimetype: storageMime,
+      filename: fileName,
+    });
+    const mediaUrlStored = uploaded?.publicUrl ?? file;
+
+    // Envia pro WhatsApp via facade. Usa URL pública do Storage (Uazapi
+    // detecta PTT melhor com URL HTTPS do que com data URI grande).
     const target = conv.contactJid ?? conv.contactPhone;
+    const fileForSend = uploaded?.publicUrl ?? file;
+    const fileNameForSend = isAudio ? (fileName ?? "audio.ogg") : fileName;
     const result = await sendMedia(
       wNum.uazapiSession,
       wNum.uazapiToken || undefined,
@@ -118,18 +106,6 @@ export async function POST(
       fileForSend,
       fileNameForSend
     );
-
-    // 2) Sobe a mídia pro Storage (se ainda não subiu — caso de imagem/video/doc)
-    if (!mediaUrlStored) {
-      const uploaded = await uploadWhatsappMedia({
-        tenantId: ctx.tenantId,
-        conversationId: id,
-        data: file,
-        mimetype,
-        filename: fileName,
-      });
-      mediaUrlStored = uploaded?.publicUrl ?? file;
-    }
 
     const [msg] = await db
       .insert(crmMessage)

@@ -31,6 +31,7 @@ import {
   scenarioG,
   scenarioI,
   scenarioJ,
+  scenarioK_audioPtt,
   scenarioH_cleanup,
 } from "./scenarios";
 
@@ -60,17 +61,20 @@ const ALL_SCENARIOS = [
   // J = live cross-tenant follow-up (envia msgs reais; só roda explicitamente
   // via --only=J pra evitar disparar nos números toda execução da suite).
   { id: "J", fn: scenarioJ },
+  // K = áudio PTT live (envia OGG real pro 5521991913946; opt-in via --only=K).
+  { id: "K", fn: scenarioK_audioPtt },
 ];
 
 async function main() {
   const args = parseArgs();
   const env = loadEnv();
 
-  // J é opt-in: dispara WhatsApp real, custa créditos Uazapi e ping nos números.
-  // Só entra na seleção quando o usuário pediu explicitamente via --only.
+  // J e K são opt-in: disparam WhatsApp real, custam créditos Uazapi e
+  // pingam números reais. Só entram via --only explícito.
+  const optIn = new Set(["J", "K"]);
   const selected = ALL_SCENARIOS.filter((s) => {
     if (args.only) return args.only.includes(s.id);
-    return s.id !== "J";
+    return !optIn.has(s.id);
   });
 
   console.log("━".repeat(72));

@@ -680,6 +680,138 @@ export async function scenarioJ(env: TestEnv): Promise<ScenarioResult> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// K. Áudio PTT live: cria tenant test, vincula wn heliobot, posta OGG no
+//    endpoint send-media e confirma que crm_message saiu como audio+ogg.
+//    Opt-in (--only=K) — envia áudio real pro 5521991913946.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function scenarioK_audioPtt(env: TestEnv): Promise<ScenarioResult> {
+  return runScenario("K:audio-ptt-live", async () => {
+    const UAZ_TOKEN = process.env.UAZ_TEST_TOKEN ?? "d7db5ff9-a73b-4dda-9808-3b1125971b3c";
+    const UAZ_SESSION = process.env.UAZ_TEST_SESSION ?? "heliobot";
+    const UAZ_PHONE = process.env.UAZ_TEST_PHONE ?? "5521991913946";
+    const SERVER = process.env.UAZ_SERVER_URL ?? "https://growthhub.uazapi.com";
+
+    const { readFileSync } = await import("fs");
+    const { join } = await import("path");
+    const { createClient } = await import("@supabase/supabase-js");
+    const sb = createClient(env.supabaseUrl, env.supabaseServiceKey);
+
+    const partner = await loginAs(env, env.partnerEmail, env.partnerPassword);
+    const ids = testIds(env, "k-audio");
+
+    // 1. Cria tenant test
+    const create = await createClient_(env, partner.cookieHeader, {
+      name: ids.name,
+      slug: ids.slug,
+      adminEmail: ids.adminEmail,
+      adminName: ids.adminName,
+      adminPassword: ids.adminPassword,
+      plan: "pro",
+    });
+    if (create.status !== 201) {
+      return { ok: false, errors: [`Create K falhou: ${create.status}`] };
+    }
+    const tenantId = (create.body as { client?: { tenantId?: string } }).client?.tenantId;
+    if (!tenantId) return { ok: false, errors: ["Sem tenantId"] };
+
+    // 2. Reescreve whatsapp_number provisionado com creds heliobot
+    const phoneUnique = `${UAZ_PHONE}-test-${env.nonce}`;
+    const { error: wnErr } = await sb
+      .from("whatsapp_number")
+      .update({
+        phone_number: phoneUnique,
+        label: `K audio ${env.nonce}`,
+        uazapi_session: UAZ_SESSION,
+        uazapi_token: UAZ_TOKEN,
+        server_url: SERVER,
+        is_active: true,
+      })
+      .eq("tenant_id", tenantId);
+    if (wnErr) return { ok: false, errors: [`Update wn: ${wnErr.message}`] };
+
+    const { data: wn } = await sb
+      .from("whatsapp_number")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .single();
+    if (!wn) return { ok: false, errors: ["wn não encontrado"] };
+
+    // 3. Cria conversation (target = mesmo número heliobot — loopback)
+    const { data: conv, error: cErr } = await sb
+      .from("crm_conversation")
+      .insert({
+        tenant_id: tenantId,
+        whatsapp_number_id: wn.id,
+        contact_phone: UAZ_PHONE, // loopback: heliobot enviando pra si mesmo
+        contact_name: `K test ${env.nonce}`,
+        classification: "new",
+        is_group: false,
+      })
+      .select()
+      .single();
+    if (cErr || !conv) return { ok: false, errors: [`Conv: ${cErr?.message}`] };
+
+    // 4. Logaem como admin do tenant test, posta áudio via endpoint
+    const admin = await loginAs(env, ids.adminEmail, ids.adminPassword);
+    const oggBuf = readFileSync(join(__dirname, "..", "fixtures", "sample.ogg"));
+    const oggB64 = oggBuf.toString("base64");
+    const dataUri = `data:audio/ogg;codecs=opus;base64,${oggB64}`;
+
+    const sendRes = await fetch(`${env.targetUrl}/api/crm/${conv.id}/send-media`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: admin.cookieHeader,
+      },
+      body: JSON.stringify({
+        file: dataUri,
+        fileName: `k-audio-${env.nonce}.ogg`,
+        isAudio: true,
+      }),
+    });
+    const sendBody = await sendRes.json().catch(() => ({}));
+    if (sendRes.status !== 200) {
+      return {
+        ok: false,
+        errors: [`send-media falhou: ${sendRes.status} ${JSON.stringify(sendBody).slice(0, 200)}`],
+      };
+    }
+
+    // 5. Asserts no DB
+    const { data: msg } = await sb
+      .from("crm_message")
+      .select("id, media_type, media_url, direction")
+      .eq("conversation_id", conv.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+    if (!msg) return { ok: false, errors: ["crm_message não encontrada"] };
+
+    const errors: string[] = [];
+    if (msg.media_type !== "audio") errors.push(`media_type=${msg.media_type} (esperado audio)`);
+    if (!String(msg.media_url ?? "").includes(".ogg")) {
+      errors.push(`media_url não termina em .ogg: ${msg.media_url}`);
+    }
+    if (msg.direction !== "outgoing") errors.push(`direction=${msg.direction}`);
+
+    if (errors.length > 0) {
+      return { ok: false, errors, details: { msg } };
+    }
+
+    return {
+      ok: true,
+      details: {
+        tenant: tenantId,
+        conversation: conv.id,
+        messageId: msg.id,
+        mediaUrl: msg.media_url,
+        note: "Validação visual no celular necessária — confirmar balão de voz.",
+      },
+    };
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // H. Cleanup: deleta todos test- via service role direto no DB
 // ─────────────────────────────────────────────────────────────────────────────
 export async function scenarioH_cleanup(env: TestEnv): Promise<ScenarioResult> {

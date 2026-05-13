@@ -6,8 +6,6 @@ const nextConfig: NextConfig = {
   // resolvido em runtime precisa bater com a localização real do arquivo —
   // webpack ofusca paths e quebra a resolução.
   serverExternalPackages: [
-    "@ffmpeg-installer/ffmpeg",
-    "fluent-ffmpeg",
     "@whiskeysockets/baileys",
     "jimp",
     "sharp",
