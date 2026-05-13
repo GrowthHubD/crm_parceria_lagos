@@ -408,6 +408,9 @@ export async function scheduleInactiveLeadFollowups(params: {
         // pausa e retoma no próximo tick que cair dentro do horário.
         const cfg = (a.triggerConfig as TriggerConfig) ?? {};
         if (!isInSendWindow(cfg.sendWindow, new Date())) {
+          console.log(
+            `[scheduleInactiveLeadFollowups] skip auto=${a.id} lead=${l.leadId} — fora da sendWindow ${JSON.stringify(cfg.sendWindow)}`
+          );
           break;
         }
 

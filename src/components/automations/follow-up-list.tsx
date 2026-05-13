@@ -472,6 +472,29 @@ function WindowEditor({
   const crossesMidnight = value.enabled && value.startHour > value.endHour;
   const emptyRange = value.enabled && value.startHour === value.endHour;
 
+  // Calcula se HORA ATUAL está dentro da janela (timezone SP).
+  // Usado pra alertar o usuário que o follow-up NÃO vai disparar agora.
+  const nowHourSP = (() => {
+    try {
+      const fmt = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Sao_Paulo",
+        hour: "numeric",
+        hour12: false,
+      });
+      return parseInt(fmt.format(new Date()), 10);
+    } catch {
+      return new Date().getHours();
+    }
+  })();
+  const insideWindow = value.enabled
+    ? value.startHour < value.endHour
+      ? nowHourSP >= value.startHour && nowHourSP < value.endHour
+      : value.startHour > value.endHour
+        ? nowHourSP >= value.startHour || nowHourSP < value.endHour
+        : false
+    : true;
+  const outOfWindow = value.enabled && !insideWindow && !emptyRange;
+
   return (
     <div className="space-y-2">
       <label className="flex items-center gap-2 text-small text-muted cursor-pointer select-none">
@@ -483,6 +506,13 @@ function WindowEditor({
         />
         <span>Disparar apenas em determinado horário</span>
       </label>
+
+      {outOfWindow && (
+        <p className="text-xs text-warning bg-warning/10 border border-warning/30 rounded px-2 py-1.5 ml-6">
+          ⏰ Agora são {String(nowHourSP).padStart(2, "0")}:00 (SP) — fora da janela{" "}
+          {value.startHour}h–{value.endHour}h. Disparos ficam pausados até a janela abrir.
+        </p>
+      )}
 
       {value.enabled && (
         <div className="flex items-center gap-2 flex-wrap pl-6">
