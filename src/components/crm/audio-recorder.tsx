@@ -19,6 +19,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Script from "next/script";
 import { Loader2, Mic, Send, Trash2, RotateCcw, Play, Pause, Timer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -35,6 +36,17 @@ const MAX_DURATION_SEC = 5 * 60;
 // Types em src/types/opus-recorder.d.ts
 import type Recorder from "opus-recorder";
 type OpusRecorderInstance = InstanceType<typeof Recorder>;
+type OpusRecorderCtor = typeof Recorder;
+
+// opus-recorder é UMD — Next 15/Webpack interop com UMD vira frágil
+// (bundler às vezes retorna { default: Recorder }, às vezes Recorder direto,
+// às vezes substitui silenciosamente). Pra evitar essa fragilidade carregamos
+// o `recorder.min.js` direto via <script> tag pra `window.Recorder`.
+declare global {
+  interface Window {
+    Recorder?: OpusRecorderCtor;
+  }
+}
 
 function fmtTime(s: number): string {
   const m = Math.floor(s / 60);
@@ -117,15 +129,23 @@ export function AudioRecorder({
   async function startRecording() {
     if (disabled) return;
 
-    let RecorderCtor: typeof Recorder;
-    try {
-      const mod = await import("opus-recorder");
-      RecorderCtor = mod.default;
-    } catch (e) {
-      console.error("[AudioRecorder] falha ao carregar opus-recorder:", e);
-      toast.error("Seu navegador não suporta gravação de áudio");
+    // Aguarda o <script> de recorder.min.js setar window.Recorder
+    // (Next.js Script com strategy="afterInteractive" já injetou no <head>).
+    let RecorderCtor: OpusRecorderCtor | undefined = window.Recorder;
+    if (!RecorderCtor) {
+      // Last-resort: aguarda até 2s caso o script ainda esteja carregando.
+      const t0 = Date.now();
+      while (!window.Recorder && Date.now() - t0 < 2000) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      RecorderCtor = window.Recorder;
+    }
+    if (!RecorderCtor || typeof RecorderCtor !== "function") {
+      console.error("[AudioRecorder] window.Recorder não disponível:", typeof RecorderCtor);
+      toast.error("Gravador de áudio ainda carregando — tente de novo em 1s");
       return;
     }
+    console.log("[AudioRecorder] using window.Recorder");
 
     try {
       const recorder = new RecorderCtor({
@@ -292,17 +312,31 @@ export function AudioRecorder({
     }
   }
 
+  // Script carrega opus-recorder pra window.Recorder. UMD module exporta tanto
+  // pra `module.exports` quanto pra `self.Recorder` — em browser sem CJS, vai
+  // pra `window.Recorder`. Strategy "lazyOnload" pra não bloquear initial render.
+  const recorderScript = (
+    <Script
+      src="/opus/recorder.min.js"
+      strategy="afterInteractive"
+      onError={() => console.error("[AudioRecorder] falha ao carregar /opus/recorder.min.js")}
+    />
+  );
+
   if (state === "idle") {
     return (
-      <button
-        onClick={startRecording}
-        disabled={disabled}
-        className="p-2.5 text-muted hover:text-foreground hover:bg-surface-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shrink-0"
-        title="Gravar áudio"
-        aria-label="Gravar áudio"
-      >
-        <Mic className="w-4 h-4" />
-      </button>
+      <>
+        {recorderScript}
+        <button
+          onClick={startRecording}
+          disabled={disabled}
+          className="p-2.5 text-muted hover:text-foreground hover:bg-surface-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shrink-0"
+          title="Gravar áudio"
+          aria-label="Gravar áudio"
+        >
+          <Mic className="w-4 h-4" />
+        </button>
+      </>
     );
   }
 
