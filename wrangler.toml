@@ -28,11 +28,11 @@ binding = "ASSETS"
 pattern = "crm.methodgrowthhub.com.br"
 custom_domain = true
 
-# Cron Triggers desativados — conta CF atingiu limite de 5 crons no plano free.
-# Alternativa: configurar cron externo (cron-job.org / GitHub Actions / EasyCron)
-# chamando: GET https://<URL>/api/cron/follow-up
-# Header: Authorization: Bearer <CRON_SECRET>
-# Frequência: a cada 1-5 minutos.
+# Cron Trigger — dispara scheduled() handler a cada 1 min pra rodar follow-ups
+# e processar automation_log pendentes. Aciona /api/cron/follow-up internamente
+# via patch no worker.js (scripts/patch-cf-handler.mjs).
+[triggers]
+crons = ["* * * * *"]
 
 # Hyperdrive — pool de conexões Postgres na borda CF. Resolve crashes
 # intermitentes que ocorriam com postgres-js TCP cold-start em workers free.

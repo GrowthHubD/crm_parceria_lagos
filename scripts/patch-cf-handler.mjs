@@ -1,31 +1,68 @@
 #!/usr/bin/env node
 // Pós-processo do build OpenNext pra Cloudflare Workers.
 //
-// Workers não suportam dynamic require em runtime. O handler bundleado pelo
-// OpenNext herda do NextNodeServer um método `getMiddlewareManifest` que faz
-// `require(this.middlewareManifestPath)` quando minimalMode=false. Como temos
-// proxy.ts desabilitado pra CF, o manifest é vazio — então sobrescrevemos pra
-// retornar o objeto inline e nunca chamar require().
+// Patch 1: handler.mjs — Workers não suportam dynamic require em runtime. O
+// handler bundleado pelo OpenNext herda do NextNodeServer um método
+// `getMiddlewareManifest` que faz `require(this.middlewareManifestPath)` quando
+// minimalMode=false. Como temos proxy.ts desabilitado pra CF, o manifest é
+// vazio — sobrescrevemos pra retornar o objeto inline e nunca chamar require().
+//
+// Patch 2: worker.js — OpenNext gera só `fetch` no export default. Adicionamos
+// `scheduled` pra Cron Trigger nativo do CF disparar /api/cron/follow-up a
+// cada 1 min (configurado em wrangler.toml [triggers] crons).
 //
 // Roda automaticamente via npm script `cf:build` (ver package.json).
 
 import fs from "node:fs";
 
+// ── Patch 1: handler.mjs (middleware manifest) ─────────────────────
 const HANDLER = ".open-next/server-functions/default/handler.mjs";
-
 const TARGET = "getMiddlewareManifest(){return this.minimalMode?null:require(this.middlewareManifestPath)}";
 const REPLACEMENT = "getMiddlewareManifest(){return {version:3,middleware:{},sortedMiddleware:[],functions:{}}}";
 
-const src = fs.readFileSync(HANDLER, "utf8");
-if (!src.includes(TARGET)) {
-  if (src.includes(REPLACEMENT)) {
-    console.log("[patch-cf-handler] já patchado, skip.");
-    process.exit(0);
-  }
-  console.error("[patch-cf-handler] target não encontrado — handler.mjs mudou de formato. Investigar.");
+const handlerSrc = fs.readFileSync(HANDLER, "utf8");
+if (handlerSrc.includes(TARGET)) {
+  fs.writeFileSync(HANDLER, handlerSrc.split(TARGET).join(REPLACEMENT));
+  console.log("[patch-cf-handler] handler.mjs (middleware manifest) patched OK.");
+} else if (handlerSrc.includes(REPLACEMENT)) {
+  console.log("[patch-cf-handler] handler.mjs já patchado, skip.");
+} else {
+  console.error("[patch-cf-handler] handler.mjs target não encontrado — formato mudou. Investigar.");
   process.exit(1);
 }
 
-const out = src.split(TARGET).join(REPLACEMENT);
-fs.writeFileSync(HANDLER, out);
-console.log("[patch-cf-handler] handler.mjs patched OK.");
+// ── Patch 2: worker.js (adicionar scheduled handler) ───────────────
+const WORKER = ".open-next/worker.js";
+const SCHEDULED_MARKER = "/* SCHEDULED_HANDLER_INJECTED */";
+const EXPORT_TARGET = "export default {\n    async fetch(request, env, ctx) {";
+const EXPORT_REPLACEMENT = `export default {
+    ${SCHEDULED_MARKER}
+    async scheduled(event, env, ctx) {
+        // Dispara /api/cron/follow-up internamente pra processar automations
+        // pendentes (lead_inactive, scheduled, etc). Cron Trigger configurado
+        // em wrangler.toml [triggers] crons = ["* * * * *"].
+        const base = env.APP_URL || env.NEXT_PUBLIC_APP_URL || "https://crm.methodgrowthhub.com.br";
+        const request = new Request(base + "/api/cron/follow-up", {
+            method: "POST",
+            headers: { "Authorization": "Bearer " + (env.CRON_SECRET || "") },
+        });
+        try {
+            const response = await this.fetch(request, env, ctx);
+            const body = await response.text();
+            console.log("[scheduled] cron/follow-up", response.status, body.slice(0, 300));
+        } catch (e) {
+            console.error("[scheduled] error:", e instanceof Error ? e.message : String(e));
+        }
+    },
+    async fetch(request, env, ctx) {`;
+
+const workerSrc = fs.readFileSync(WORKER, "utf8");
+if (workerSrc.includes(SCHEDULED_MARKER)) {
+  console.log("[patch-cf-handler] worker.js scheduled já patchado, skip.");
+} else if (workerSrc.includes(EXPORT_TARGET)) {
+  fs.writeFileSync(WORKER, workerSrc.replace(EXPORT_TARGET, EXPORT_REPLACEMENT));
+  console.log("[patch-cf-handler] worker.js scheduled handler injected OK.");
+} else {
+  console.error("[patch-cf-handler] worker.js export target não encontrado — formato mudou. Investigar.");
+  process.exit(1);
+}
