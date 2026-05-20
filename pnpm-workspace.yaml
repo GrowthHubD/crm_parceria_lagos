@@ -1,0 +1,16 @@
+allowBuilds:
+  '@whiskeysockets/baileys': true
+  esbuild: true
+  msw: true
+  protobufjs: true
+  sharp: true
+  unrs-resolver: true
+  workerd: true
+onlyBuiltDependencies:
+  - '@whiskeysockets/baileys'
+  - esbuild
+  - msw
+  - protobufjs
+  - sharp
+  - unrs-resolver
+  - workerd
