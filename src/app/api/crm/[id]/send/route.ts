@@ -30,6 +30,9 @@ export async function POST(
       return NextResponse.json({ error: "Dados inválidos", details: parsed.error.flatten() }, { status: 400 });
     }
 
+    // Filtro por tenantId é obrigatório — sem ele, qualquer user logado com
+    // UUID de conversa de outro tenant conseguiria enviar mensagem nesse
+    // contexto. Resposta é 404 (não 403) pra não vazar existência da conversa.
     const [conv] = await db
       .select({
         id: crmConversation.id,
@@ -38,7 +41,7 @@ export async function POST(
         whatsappNumberId: crmConversation.whatsappNumberId,
       })
       .from(crmConversation)
-      .where(eq(crmConversation.id, id))
+      .where(and(eq(crmConversation.id, id), eq(crmConversation.tenantId, ctx.tenantId)))
       .limit(1);
 
     if (!conv) return NextResponse.json({ error: "Conversa não encontrada" }, { status: 404 });

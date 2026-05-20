@@ -223,9 +223,19 @@ export const DEFAULT_PERMISSIONS: Record<
   },
 
   // --- SaaS: parceiro revendedor ---
+  // partner_admin opera o próprio tenant home (pode ter conversas/leads
+  // próprios) E gerencia sub-clientes via Tenant Switcher. Por isso vê os
+  // módulos operacionais (CRM, Pipeline, Tarefas etc.) além dos módulos
+  // de gerência (Meus Clientes, Métricas).
   partner_admin: {
     modules: [
       "dashboard",
+      "pipeline",
+      "crm",
+      "tasks",
+      "agenda",
+      "automations",
+      "financial",
       "partner_clients",
       "partner_metrics",
       "configuracoes",

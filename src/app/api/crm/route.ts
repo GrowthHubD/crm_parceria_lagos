@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { crmConversation, crmMessage, whatsappNumber } from "@/lib/db/schema/crm";
 import { lead, leadTagAssignment, pipelineStage } from "@/lib/db/schema/pipeline";
 import { tenant } from "@/lib/db/schema/tenants";
-import { eq, and, desc, inArray, or } from "drizzle-orm";
+import { eq, and, desc, inArray, or, sql } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 /**
@@ -123,6 +123,9 @@ export async function GET(request: NextRequest) {
     if (classification) whereConditions.push(eq(crmConversation.classification, classification));
     if (restrictToConvIds) whereConditions.push(inArray(crmConversation.id, restrictToConvIds));
 
+    // Paginação inicial: 50 conversas mais recentes. Em tenants com 500+ convs
+    // (Lagos), carregar tudo era ~2-5s. Cursor-based paging (?before=<ts>) fica
+    // pro Bloco 2 — agora só limita o blast radius do payload e do JSON parse.
     const conversations = await db
       .select({
         id: crmConversation.id,
@@ -144,36 +147,44 @@ export async function GET(request: NextRequest) {
       .from(crmConversation)
       .leftJoin(whatsappNumber, eq(crmConversation.whatsappNumberId, whatsappNumber.id))
       .where(and(...whereConditions))
-      .orderBy(desc(crmConversation.lastMessageAt));
+      .orderBy(desc(crmConversation.lastMessageAt))
+      .limit(50);
 
     const numbers = await db
       .select()
       .from(whatsappNumber)
       .where(and(eq(whatsappNumber.isActive, true), inArray(whatsappNumber.tenantId, effectiveTenantIds)));
 
-    // ── Preview da última msg por conversa (1 query LIMIT 1 por conv,
-    //    em paralelo). Mais previsível que JOIN + DISTINCT ON.
+    // ── Preview da última msg por conversa em UMA query (DISTINCT ON).
+    //    Antes: 1 query por conversa via Promise.all → com 50 convs = 50
+    //    roundtrips Hyperdrive (max:1 client em src/lib/db/index.ts:65) → 2-5s
+    //    de "CRM travado pra carregar".
+    //    Agora: 1 query só, usando DISTINCT ON específico do Postgres.
     const convIds = conversations.map((c) => c.id);
     const lastMsgByConv = new Map<
       string,
       { content: string | null; mediaType: string | null; direction: string }
     >();
     if (convIds.length > 0) {
-      await Promise.all(
-        convIds.map(async (cid) => {
-          const [m] = await db
-            .select({
-              content: crmMessage.content,
-              mediaType: crmMessage.mediaType,
-              direction: crmMessage.direction,
-            })
-            .from(crmMessage)
-            .where(eq(crmMessage.conversationId, cid))
-            .orderBy(desc(crmMessage.timestamp))
-            .limit(1);
-          if (m) lastMsgByConv.set(cid, m);
-        })
-      );
+      const rows = (await db.execute(sql`
+        SELECT DISTINCT ON (conversation_id)
+          conversation_id, content, media_type, direction
+        FROM crm_message
+        WHERE conversation_id IN (${sql.join(convIds.map((c) => sql`${c}`), sql`, `)})
+        ORDER BY conversation_id, timestamp DESC
+      `)) as unknown as Array<{
+        conversation_id: string;
+        content: string | null;
+        media_type: string | null;
+        direction: string;
+      }>;
+      for (const r of rows) {
+        lastMsgByConv.set(r.conversation_id, {
+          content: r.content,
+          mediaType: r.media_type,
+          direction: r.direction,
+        });
+      }
     }
 
     const conversationsWithPreview = conversations.map((c) => {

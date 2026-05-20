@@ -22,6 +22,8 @@ import {
   LeadFilters,
   useLeadFiltersFromUrl,
 } from "@/components/shared/lead-filters";
+import { toast } from "@/hooks/use-toast";
+import { useRouter, usePathname } from "next/navigation";
 
 interface Tag {
   id: string;
@@ -314,6 +316,9 @@ export function KanbanBoard({
   // O picker de funil dedicado fica no header (mantém UX existente);
   // o LeadFilters mostra tag + stage + classification.
   const filters = useLeadFiltersFromUrl();
+  const router = useRouter();
+  const pathname = usePathname();
+  const hasActiveFilter = !!(filters.tagId || filters.stageId || filters.classification);
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
   const [newStageOpen, setNewStageOpen] = useState(false);
   const wonStageId = stages.find((s) => s.isWon)?.id ?? "";
@@ -482,6 +487,7 @@ export function KanbanBoard({
 
   const handleLeadSaved = useCallback((savedLead: Record<string, unknown>) => {
     const lead = savedLead as unknown as Lead;
+    const isNew = !leads.find((l) => l.id === lead.id);
     setLeads((prev) => {
       const exists = prev.find((l) => l.id === lead.id);
       if (exists) {
@@ -489,7 +495,23 @@ export function KanbanBoard({
       }
       return [...prev, { ...lead, tags: [], assigneeName: null, updatedAt: new Date().toISOString() }];
     });
-  }, []);
+
+    // Detecta se filtros ativos vão ocultar o lead recém criado. O lead novo
+    // não tem tags atribuídas nem classification, então filtros desses campos
+    // sempre o escondem — causa do bug "criei e sumiu" reportado pelo usuário.
+    if (isNew) {
+      const hiddenByTag = !!filters.tagId;
+      const hiddenByStage = !!filters.stageId && lead.stageId !== filters.stageId;
+      const hiddenByClassification = !!filters.classification;
+      if (hiddenByTag || hiddenByStage || hiddenByClassification) {
+        toast.info("Lead criado, mas oculto pelos filtros ativos. Limpe os filtros pra ver.");
+      }
+    }
+  }, [leads, filters.tagId, filters.stageId, filters.classification]);
+
+  const handleClearFilters = useCallback(() => {
+    router.replace(pathname);
+  }, [router, pathname]);
 
   const totalLeads = leads.length;
   const totalValue = leads.reduce((sum, l) => sum + (Number(l.estimatedValue) || 0), 0);
@@ -564,7 +586,7 @@ export function KanbanBoard({
       </div>
 
       {/* ── Filter bar (compartilhado com /crm) ── */}
-      <div className="mb-5">
+      <div className="mb-3">
         <LeadFilters
           tags={allTags}
           stages={stages.map((s) => ({ id: s.id, name: s.name, color: s.color }))}
@@ -572,6 +594,22 @@ export function KanbanBoard({
           show={{ tags: true, stages: true, classification: true, funnel: false }}
         />
       </div>
+
+      {/* Banner: filtros ativos escondem leads — evita "criei lead e sumiu". */}
+      {hasActiveFilter && leads.length > filteredLeads.length && (
+        <div className="mb-4 flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-warning/40 bg-warning/10 text-sm">
+          <span className="text-foreground/80">
+            <strong>{leads.length - filteredLeads.length}</strong> lead(s) ocultos pelos filtros ativos.
+          </span>
+          <button
+            onClick={handleClearFilters}
+            className="flex items-center gap-1 px-2 py-1 rounded text-warning hover:bg-warning/20 transition-colors text-xs font-medium cursor-pointer"
+          >
+            <X className="w-3 h-3" />
+            Limpar filtros
+          </button>
+        </div>
+      )}
 
       {/* ── Board — horizontal scroll ── */}
       <DndContext
