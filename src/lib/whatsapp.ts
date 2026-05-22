@@ -186,8 +186,8 @@ export async function sendText(
   if (WHATSAPP_PROVIDER === "uazapi") {
     // Uazapi v2 não suporta quoted via API pública (ainda) — envia sem
     try {
-      const r = await uazapiSendText(instanceId, token, phone, text, serverUrl);
-      return { messageId: r.message_id, error: r.error };
+      const r = (await uazapiSendText(instanceId, token, phone, text, serverUrl)) as Record<string, unknown>;
+      return { messageId: extractMessageId(r), error: typeof r.error === "string" ? r.error : undefined };
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };
     }
@@ -201,6 +201,25 @@ export async function sendText(
   }
 }
 
+/**
+ * Uazapi v2 mudou o nome do campo do messageID entre versões. Tenta extrair
+ * de qualquer dos formatos conhecidos pra não marcar mensagens enviadas como
+ * "failed" só porque o nome do campo mudou no response.
+ */
+function extractMessageId(r: Record<string, unknown>): string | undefined {
+  if (typeof r.message_id === "string") return r.message_id;
+  if (typeof r.messageID === "string") return r.messageID;
+  if (typeof r.id === "string") return r.id;
+  const key = r.key as { id?: string } | undefined;
+  if (key && typeof key.id === "string") return key.id;
+  const msg = r.message as { id?: string; key?: { id?: string } } | undefined;
+  if (msg?.id && typeof msg.id === "string") return msg.id;
+  if (msg?.key?.id && typeof msg.key.id === "string") return msg.key.id;
+  const messages = r.messages as Array<{ key?: { id?: string } }> | undefined;
+  if (messages?.[0]?.key?.id) return messages[0].key.id;
+  return undefined;
+}
+
 export async function sendMedia(
   instanceId: string,
   token: string | undefined,
@@ -212,7 +231,7 @@ export async function sendMedia(
 ): Promise<SendResult> {
   if (WHATSAPP_PROVIDER === "uazapi") {
     try {
-      const r = await uazapiSendMedia(
+      const r = (await uazapiSendMedia(
         instanceId,
         token,
         phone,
@@ -220,8 +239,8 @@ export async function sendMedia(
         fileName,
         caption,
         serverUrl
-      );
-      return { messageId: r.message_id, error: r.error };
+      )) as Record<string, unknown>;
+      return { messageId: extractMessageId(r), error: typeof r.error === "string" ? r.error : undefined };
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };
     }

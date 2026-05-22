@@ -113,14 +113,15 @@ export async function POST(
       wNum.serverUrl ?? undefined
     );
 
-    // Mesmo fix do send/route.ts: nunca marcar como "sent" se o provider
-    // retornou erro. Logar + 502 + status="failed" no DB.
-    if (result.error || !result.messageId) {
+    // Só marca failed se result.error explícito. messageId ausente ≠ falha
+    // (Uazapi v2 pode retornar 200 sem o campo no nome esperado).
+    if (result.error) {
       console.error("[CRM] sendMedia falhou:", {
         operation: "send-media",
         conversationId: id,
-        provider_error: result.error ?? "no messageId returned",
+        provider_error: result.error,
         instance: wNum.uazapiSession,
+        serverUrl: wNum.serverUrl ?? "(default)",
         mediaType,
       });
       await db.insert(crmMessage).values({
@@ -133,7 +134,7 @@ export async function POST(
         status: "failed",
       });
       return NextResponse.json(
-        { error: result.error ?? "Falha ao entregar mídia ao WhatsApp" },
+        { error: result.error },
         { status: 502 }
       );
     }
@@ -142,7 +143,7 @@ export async function POST(
       .insert(crmMessage)
       .values({
         conversationId: id,
-        messageIdWa: result.messageId,
+        messageIdWa: result.messageId ?? null,
         direction: "outgoing",
         mediaType,
         mediaUrl: mediaUrlStored,
