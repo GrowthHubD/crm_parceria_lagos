@@ -98,11 +98,39 @@ export async function POST(
       quoted
     );
 
+    // Se sendText retornou erro do provider (Uazapi/Evolution), NÃO marca a
+    // mensagem como enviada. Antes esse bloco ignorava result.error e gravava
+    // status:"sent" mesmo quando o WhatsApp recusava — usuário via "Sent" na
+    // UI mas mensagem nunca chegava ao destinatário. Agora propaga 502.
+    if (result.error || !result.messageId) {
+      console.error("[CRM] sendText falhou:", {
+        operation: "send",
+        conversationId: id,
+        provider_error: result.error ?? "no messageId returned",
+        instance: wNum.uazapiSession,
+      });
+      // Grava como failed pra rastrear no DB sem mostrar pro user como enviada.
+      await db.insert(crmMessage).values({
+        conversationId: id,
+        messageIdWa: null,
+        direction: "outgoing",
+        content: parsed.data.message,
+        mediaType: "text",
+        status: "failed",
+        quotedMessageId: quoted?.key.id ?? null,
+        quotedContent,
+      });
+      return NextResponse.json(
+        { error: result.error ?? "Falha ao entregar mensagem ao WhatsApp" },
+        { status: 502 }
+      );
+    }
+
     const [msg] = await db
       .insert(crmMessage)
       .values({
         conversationId: id,
-        messageIdWa: result.messageId ?? null,
+        messageIdWa: result.messageId,
         direction: "outgoing",
         content: parsed.data.message,
         mediaType: "text",
