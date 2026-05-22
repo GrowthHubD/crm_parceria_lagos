@@ -65,4 +65,8 @@ jobs:
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # Wrangler 4.87 (locked no projeto) bate em entitlements.not_available
+          # [10007] no endpoint assets-upload-session — endpoint mudou em versões
+          # mais novas. Forçar latest pra usar o path correto.
+          wranglerVersion: latest
           command: deploy
