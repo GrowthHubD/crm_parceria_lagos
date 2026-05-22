@@ -1,3 +1,7 @@
+# baileys@7.0.0-rc.9 declara libsignal via git-repository. pnpm 11 bloqueia
+# subdeps exoticas por default (blockExoticSubdeps). Permitir explicitamente —
+# libsignal é o lib legítimo de Signal Protocol, requerido pelo baileys.
+blockExoticSubdeps: false
 allowBuilds:
   '@ffmpeg-installer/ffmpeg': true
   '@ffmpeg-installer/linux-x64': true
