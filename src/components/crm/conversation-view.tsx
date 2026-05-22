@@ -274,6 +274,7 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
   const [linkedLead, setLinkedLead] = useState<LinkedLead | null>(null);
   const [inputText, setInputText] = useState("");
   const [sending, setSending] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [loading, setLoading] = useState(true);
   const [linkingLead, setLinkingLead] = useState(false);
   const [replyTo, setReplyTo] = useState<{ id: string; content: string } | null>(null);
@@ -366,15 +367,29 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
   }, []);
 
   const handleSend = async () => {
-    const hasText = inputText.trim().length > 0;
-    const hasFiles = stagedFiles.length > 0;
+    const textToSend = inputText.trim();
+    const hasText = textToSend.length > 0;
+    const filesToSend = stagedFiles;
+    const hasFiles = filesToSend.length > 0;
     if ((!hasText && !hasFiles) || sending) return;
+
+    // Optimistic clear: limpa input/files/reply ANTES do fetch pra o user
+    // poder digitar a próxima imediatamente, sem esperar 1-3s do round-trip
+    // pra Uazapi. Se algum send falhar, restauramos o texto pro user reenviar.
+    const previousReply = replyTo;
+    setInputText("");
+    setStagedFiles([]);
+    setReplyTo(null);
     setSending(true);
+
+    // Mantém o foco no textarea — em mobile, sem isso o teclado virtual fecha.
+    requestAnimationFrame(() => textareaRef.current?.focus());
+
+    let textErr: string | null = null;
     try {
       const newMessages: Message[] = [];
 
-      // Send each staged file
-      for (const f of stagedFiles) {
+      for (const f of filesToSend) {
         const res = await fetch(`/api/crm/${conversationId}/send-media`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -383,32 +398,51 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
         if (res.ok) {
           const data = await res.json();
           newMessages.push(data.message);
+        } else {
+          const data = await res.json().catch(() => ({}));
+          toast.error(`Falha ao enviar mídia: ${data.error ?? res.statusText}`);
         }
       }
 
-      // Send text message if present
       if (hasText) {
         const res = await fetch(`/api/crm/${conversationId}/send`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: inputText.trim(), quotedMessageId: replyTo?.id }),
+          body: JSON.stringify({ message: textToSend, quotedMessageId: previousReply?.id }),
         });
         if (res.ok) {
           const data = await res.json();
           newMessages.push(data.message);
+        } else {
+          const data = await res.json().catch(() => ({}));
+          textErr = data.error ?? res.statusText;
         }
       }
 
-      setMessages((prev) => {
-        const ids = new Set(prev.map((m) => m.id));
-        const unique = newMessages.filter((m) => !ids.has(m.id));
-        return unique.length === 0 ? prev : [...prev, ...unique];
-      });
-      setInputText("");
-      setStagedFiles([]);
-      setReplyTo(null);
-    } catch { /* silent */ }
-    finally { setSending(false); }
+      if (newMessages.length > 0) {
+        setMessages((prev) => {
+          const ids = new Set(prev.map((m) => m.id));
+          const unique = newMessages.filter((m) => !ids.has(m.id));
+          return unique.length === 0 ? prev : [...prev, ...unique];
+        });
+      }
+
+      // Erro só no texto → restaura o conteúdo do input pra ele reenviar
+      if (textErr) {
+        setInputText(textToSend);
+        setReplyTo(previousReply);
+        toast.error(`Falha ao enviar: ${textErr}`);
+      }
+    } catch (e) {
+      // Falha de rede → restaura tudo
+      if (hasText) setInputText(textToSend);
+      setStagedFiles(filesToSend);
+      setReplyTo(previousReply);
+      toast.error(e instanceof Error ? e.message : "Erro de conexão");
+    } finally {
+      setSending(false);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -912,6 +946,7 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
             {!recordingActive && (
               <>
                 <textarea
+                  ref={textareaRef}
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyDown={(e) => {
