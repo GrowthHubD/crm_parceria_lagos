@@ -1,0 +1,60 @@
+name: deploy
+
+# Deploy automático pra Cloudflare Workers a cada push em main.
+# Necessário em vez de deployar local porque OpenNext + Windows não compila
+# (Access denied no esbuild copiando node_modules) — runner Linux do GH Actions
+# resolve isso.
+#
+# Setup (uma vez só):
+#   1. Vá em https://dash.cloudflare.com/profile/api-tokens → Create Token →
+#      template "Edit Cloudflare Workers". Copie o valor.
+#   2. No repo: Settings → Secrets and variables → Actions → New repository secret
+#      Name:  CLOUDFLARE_API_TOKEN
+#      Value: (cole o token)
+#   3. Pronto. Próximo push pra main dispara deploy. Aba "Actions" mostra log.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build OpenNext (gera .open-next/worker.js)
+        run: npx opennextjs-cloudflare build
+
+      - name: Patch CF handler (cron triggers + scheduled handler)
+        run: node scripts/patch-cf-handler.mjs
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: deploy
