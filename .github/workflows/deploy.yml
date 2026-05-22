@@ -49,6 +49,14 @@ jobs:
 
       - name: Build OpenNext (gera .open-next/worker.js)
         run: npx opennextjs-cloudflare build
+        env:
+          # NEXT_PUBLIC_* precisam estar no env do build pra serem inlined
+          # no bundle JS (substituídos em build-time). Setar como secret do
+          # Worker só (runtime) não basta — o client browser nunca tem acesso
+          # a process.env em runtime.
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_APP_URL: https://crm.methodgrowthhub.com.br
 
       - name: Patch CF handler (cron triggers + scheduled handler)
         run: node scripts/patch-cf-handler.mjs
