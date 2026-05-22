@@ -385,16 +385,24 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
     // Mantém o foco no textarea — em mobile, sem isso o teclado virtual fecha.
     requestAnimationFrame(() => textareaRef.current?.focus());
 
+    // Timeout safeguard: se o fetch travar (cold-start, rede flaky, CORS bug
+    // silencioso), aborta em 30s pra não deixar o spinner preso pra sempre.
+    const ac = new AbortController();
+    const timeoutId = setTimeout(() => ac.abort(), 30000);
+
     let textErr: string | null = null;
     try {
       const newMessages: Message[] = [];
 
       for (const f of filesToSend) {
+        console.log("[handleSend] sending media to", `/api/crm/${conversationId}/send-media`);
         const res = await fetch(`/api/crm/${conversationId}/send-media`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ file: f.dataUri, fileName: f.fileName, isImage: f.isImage }),
+          signal: ac.signal,
         });
+        console.log("[handleSend] media response", res.status);
         if (res.ok) {
           const data = await res.json();
           newMessages.push(data.message);
@@ -405,11 +413,14 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
       }
 
       if (hasText) {
+        console.log("[handleSend] sending text to", `/api/crm/${conversationId}/send`);
         const res = await fetch(`/api/crm/${conversationId}/send`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: textToSend, quotedMessageId: previousReply?.id }),
+          signal: ac.signal,
         });
+        console.log("[handleSend] text response", res.status);
         if (res.ok) {
           const data = await res.json();
           newMessages.push(data.message);
@@ -434,12 +445,17 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
         toast.error(`Falha ao enviar: ${textErr}`);
       }
     } catch (e) {
-      // Falha de rede → restaura tudo
+      // Falha de rede / timeout / abort → restaura tudo
+      console.error("[handleSend] erro:", e);
       if (hasText) setInputText(textToSend);
       setStagedFiles(filesToSend);
       setReplyTo(previousReply);
-      toast.error(e instanceof Error ? e.message : "Erro de conexão");
+      const msg = e instanceof Error
+        ? (e.name === "AbortError" ? "Tempo esgotado (30s) — tenta de novo" : e.message)
+        : "Erro de conexão";
+      toast.error(msg);
     } finally {
+      clearTimeout(timeoutId);
       setSending(false);
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
