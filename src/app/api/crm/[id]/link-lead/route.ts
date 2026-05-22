@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getTenantContext } from "@/lib/tenant";
 import { checkPermission } from "@/lib/permissions";
+import { handleApiError } from "@/lib/api-helpers";
 import { db } from "@/lib/db";
 import { crmConversation } from "@/lib/db/schema/crm";
 import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
@@ -84,8 +85,7 @@ export async function POST(
     }
 
     return NextResponse.json({ error: "leadId ou createNew obrigatório" }, { status: 400 });
-  } catch {
-    console.error("[CRM] link-lead failed");
-    return NextResponse.json({ error: "Erro interno" }, { status: 500 });
+  } catch (e) {
+    return handleApiError(e, "CRM link-lead");
   }
 }

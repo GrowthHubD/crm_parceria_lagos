@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantContext } from "@/lib/tenant";
 import { checkPermission } from "@/lib/permissions";
+import { handleApiError } from "@/lib/api-helpers";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage } from "@/lib/db/schema/crm";
 import { eq, and } from "drizzle-orm";
@@ -33,8 +34,7 @@ export async function PATCH(
 
     return NextResponse.json({ message: updated });
   } catch (e) {
-    console.error("[CRM] PATCH message failed:", e);
-    return NextResponse.json({ error: "Erro interno" }, { status: 500 });
+    return handleApiError(e, "CRM PATCH message");
   }
 }
 
@@ -65,7 +65,6 @@ export async function DELETE(
 
     return NextResponse.json({ ok: true, id: deleted.id });
   } catch (e) {
-    console.error("[CRM] DELETE message failed:", e);
-    return NextResponse.json({ error: "Erro interno" }, { status: 500 });
+    return handleApiError(e, "CRM DELETE message");
   }
 }

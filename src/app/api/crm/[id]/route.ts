@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { checkPermission } from "@/lib/permissions";
 import { getTenantContext } from "@/lib/tenant";
+import { handleApiError } from "@/lib/api-helpers";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage, whatsappNumber } from "@/lib/db/schema/crm";
 import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
@@ -106,9 +107,8 @@ export async function GET(
       messages,
       linkedLead: linkedLead ? { ...linkedLead, nextFollowUp } : null,
     });
-  } catch {
-    console.error("[CRM] GET conversation failed:", { operation: "get" });
-    return NextResponse.json({ error: "Erro interno" }, { status: 500 });
+  } catch (e) {
+    return handleApiError(e, "CRM GET conversation");
   }
 }
 
@@ -143,8 +143,7 @@ export async function PATCH(
 
     if (!updated) return NextResponse.json({ error: "Conversa não encontrada" }, { status: 404 });
     return NextResponse.json({ conversation: updated });
-  } catch {
-    console.error("[CRM] PATCH conversation failed:", { operation: "update" });
-    return NextResponse.json({ error: "Erro interno" }, { status: 500 });
+  } catch (e) {
+    return handleApiError(e, "CRM PATCH conversation");
   }
 }

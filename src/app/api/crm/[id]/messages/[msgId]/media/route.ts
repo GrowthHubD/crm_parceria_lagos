@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantContext } from "@/lib/tenant";
 import { checkPermission } from "@/lib/permissions";
+import { handleApiError } from "@/lib/api-helpers";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage } from "@/lib/db/schema/crm";
 import { eq, and } from "drizzle-orm";
@@ -111,7 +112,6 @@ export async function GET(
     // Data URI legacy (mensagens antigas antes da migração pro Storage)
     return dataUriToResponse(msg.mediaUrl, fallbackMime);
   } catch (e) {
-    console.error("[CRM] media fetch failed:", e);
-    return NextResponse.json({ error: "Erro ao buscar mídia" }, { status: 500 });
+    return handleApiError(e, "CRM media fetch");
   }
 }

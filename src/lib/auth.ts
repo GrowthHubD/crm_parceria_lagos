@@ -89,10 +89,18 @@ async function getSession({ headers: _headers }: { headers?: Headers } = {}): Pr
   const { data, error } = await supabase.auth.getUser();
   if (error || !data.user) {
     if (error) {
+      const msg = error.message ?? "";
+      const causeType =
+        msg.includes("invalid_grant") || msg.includes("JWT expired") || msg.includes("expired")
+          ? "EXPIRED_TOKEN"
+          : msg.includes("invalid")
+            ? "INVALID_TOKEN"
+            : "OTHER";
       console.warn("[auth] getUser error:", {
         name: error.name,
         message: error.message,
         status: (error as { status?: number }).status,
+        causeType,
       });
     }
     return null;

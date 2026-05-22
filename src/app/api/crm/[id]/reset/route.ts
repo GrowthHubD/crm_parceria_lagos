@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantContext } from "@/lib/tenant";
 import { checkPermission } from "@/lib/permissions";
+import { handleApiError } from "@/lib/api-helpers";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage } from "@/lib/db/schema/crm";
 import { lead } from "@/lib/db/schema/pipeline";
@@ -61,7 +62,6 @@ export async function DELETE(
 
     return NextResponse.json({ ok: true });
   } catch (e) {
-    console.error("[CRM RESET]", e);
-    return NextResponse.json({ error: e instanceof Error ? e.message : "erro" }, { status: 500 });
+    return handleApiError(e, "CRM RESET");
   }
 }

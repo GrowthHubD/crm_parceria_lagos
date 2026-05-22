@@ -25,6 +25,19 @@ export interface TenantContext {
 }
 
 /**
+ * Erro de auth com status HTTP anexado. Antes `getTenantContext` lançava
+ * `Error("UNAUTHENTICATED")` genérico e o catch das rotas convertia em 500.
+ * Usuário via 500 e o cliente Inbox.tsx engolia em catch silencioso.
+ * Agora rotas detectam `e instanceof AuthError` e retornam o statusCode certo.
+ */
+export class AuthError extends Error {
+  constructor(public statusCode: number, message: string) {
+    super(message);
+    this.name = "AuthError";
+  }
+}
+
+/**
  * Helper: o user pode gerenciar clientes (criar/listar/resetar senha)?
  * Critérios:
  *   1. role superadmin → sempre
@@ -112,7 +125,17 @@ export async function getTenantContext(
     session = dev as unknown as typeof session;
   }
 
-  if (!session) throw new Error("UNAUTHENTICATED");
+  if (!session) {
+    // Log diagnóstico — distingue "sem cookie no header" de "cookie presente
+    // mas inválido". Crítico pra diagnóstico de 401 em prod.
+    const cookieHdr = headers.get("cookie") ?? "";
+    console.warn("[tenant] UNAUTHENTICATED", {
+      hasCookieHeader: cookieHdr.length > 0,
+      sbAuthCookies: cookieHdr.split(";").filter((c) => c.includes("-auth-token")).length,
+      isDev,
+    });
+    throw new AuthError(401, "UNAUTHENTICATED");
+  }
 
   // Cookie override tem precedência sobre header. Cookie é httpOnly assinado
   // (signOverride/verifyOverride em ./tenant-override) e acompanha todo fetch
@@ -254,7 +277,7 @@ export async function getTenantContext(
 
   if (!row) {
     if (isDev) return { ...DEV_TENANT_CONTEXT, userId: session.user.id };
-    throw new Error("NO_TENANT_ACCESS");
+    throw new AuthError(403, "NO_TENANT_ACCESS");
   }
 
   const ctx: TenantContext = {

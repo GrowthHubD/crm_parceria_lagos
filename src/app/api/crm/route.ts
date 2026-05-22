@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkPermission } from "@/lib/permissions";
 import { getTenantContext } from "@/lib/tenant";
+import { handleApiError } from "@/lib/api-helpers";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage, whatsappNumber } from "@/lib/db/schema/crm";
 import { lead, leadTagAssignment, pipelineStage } from "@/lib/db/schema/pipeline";
@@ -203,8 +204,7 @@ export async function GET(request: NextRequest) {
       numbers,
       tenants: visibleTenants,
     });
-  } catch {
-    console.error("[CRM] GET failed:", { operation: "list" });
-    return NextResponse.json({ error: "Erro interno" }, { status: 500 });
+  } catch (e) {
+    return handleApiError(e, "CRM GET");
   }
 }

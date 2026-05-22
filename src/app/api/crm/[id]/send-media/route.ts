@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getTenantContext } from "@/lib/tenant";
 import { checkPermission } from "@/lib/permissions";
+import { handleApiError } from "@/lib/api-helpers";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage, whatsappNumber } from "@/lib/db/schema/crm";
 import { eq, and } from "drizzle-orm";
@@ -153,7 +154,6 @@ export async function POST(
 
     return NextResponse.json({ message: msg });
   } catch (e) {
-    console.error("[CRM] POST send-media failed:", e);
-    return NextResponse.json({ error: "Erro ao enviar arquivo" }, { status: 500 });
+    return handleApiError(e, "CRM POST send-media");
   }
 }

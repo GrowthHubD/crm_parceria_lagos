@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getTenantContext } from "@/lib/tenant";
 import { checkPermission } from "@/lib/permissions";
+import { handleApiError } from "@/lib/api-helpers";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage, whatsappNumber } from "@/lib/db/schema/crm";
 import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
@@ -186,7 +187,6 @@ export async function POST(
 
     return NextResponse.json({ message: msg });
   } catch (e) {
-    console.error("[CRM] POST send failed:", e);
-    return NextResponse.json({ error: "Erro ao enviar mensagem" }, { status: 500 });
+    return handleApiError(e, "CRM POST send");
   }
 }
