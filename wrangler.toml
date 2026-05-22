@@ -16,17 +16,12 @@ main = ".open-next/worker.js"
 # [placement]
 # mode = "smart"
 
-# Alias: o bundle do Next 16 (pages.runtime.prod.js) faz require de pacotes
-# opcionais que o wrangler não consegue resolver em prod (não estão em deps
-# diretas, e o pnpm symlink quebra a resolução durante o bundle). Aponta
-# explicitamente — resolve o "Could not resolve <pkg>" no deploy.
-[alias]
-"styled-jsx" = "./node_modules/.pnpm/styled-jsx@5.1.6_@babel+core@7.29.0_react@19.2.4/node_modules/styled-jsx/index.js"
-"critters" = "./cf-stubs/critters.js"
-# react/react-dom: o pnpm symlink dentro de .open-next dá "Access is denied"
-# em Windows. Aponta direto pra raiz do node_modules — bypassa o symlink quebrado.
-"react" = "./node_modules/.pnpm/react@19.2.4/node_modules/react/index.js"
-"react-dom" = "./node_modules/.pnpm/react-dom@19.2.4_react@19.2.4/node_modules/react-dom/index.js"
+# Aliases removidos: foram workaround do build local Windows (pnpm symlinks
+# que o esbuild não conseguia ler). Em runtime de GitHub Actions Linux o
+# OpenNext build completa normal e gera handler.mjs final sem precisar disso.
+# Os aliases de react/react-dom apontando pra index.js quebravam subpaths
+# (react/jsx-runtime etc) → Worker exception 1101 em runtime. styled-jsx e
+# critters: igualmente desnecessários se o bundle do OpenNext for completo.
 
 [assets]
 directory = ".open-next/assets"
