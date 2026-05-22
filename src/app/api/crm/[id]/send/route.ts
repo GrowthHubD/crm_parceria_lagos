@@ -51,6 +51,7 @@ export async function POST(
       .select({
         uazapiSession: whatsappNumber.uazapiSession,
         uazapiToken: whatsappNumber.uazapiToken,
+        serverUrl: whatsappNumber.serverUrl,
       })
       .from(whatsappNumber)
       .where(eq(whatsappNumber.id, conv.whatsappNumberId))
@@ -91,12 +92,16 @@ export async function POST(
     }
 
     const target = conv.contactJid ?? conv.contactPhone;
+    // CRÍTICO: passar wNum.serverUrl pra sendText. Sem isso, ele cai no env
+    // UAZAPI_BASE_URL (growthhub.uazapi.com) e tokens de tenants em outros
+    // servers (ex: montanha.uazapi.com) são rejeitados com 401 Invalid token.
     const result = await sendText(
       wNum.uazapiSession,
       wNum.uazapiToken || undefined,
       target,
       parsed.data.message,
-      quoted
+      quoted,
+      wNum.serverUrl ?? undefined
     );
 
     // Se sendText retornou erro do provider (Uazapi/Evolution), NÃO marca a

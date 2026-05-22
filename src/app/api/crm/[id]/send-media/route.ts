@@ -51,6 +51,7 @@ export async function POST(
       .select({
         uazapiSession: whatsappNumber.uazapiSession,
         uazapiToken: whatsappNumber.uazapiToken,
+        serverUrl: whatsappNumber.serverUrl,
       })
       .from(whatsappNumber)
       .where(eq(whatsappNumber.id, conv.whatsappNumberId))
@@ -100,12 +101,16 @@ export async function POST(
     const target = conv.contactJid ?? conv.contactPhone;
     const fileForSend = uploaded?.publicUrl ?? file;
     const fileNameForSend = isAudio ? (fileName ?? "audio.ogg") : fileName;
+    // Pass wNum.serverUrl pra que tenants em servers Uazapi diferentes
+    // (ex: montanha vs growthhub) sejam roteados corretamente.
     const result = await sendMedia(
       wNum.uazapiSession,
       wNum.uazapiToken || undefined,
       target,
       fileForSend,
-      fileNameForSend
+      fileNameForSend,
+      undefined,
+      wNum.serverUrl ?? undefined
     );
 
     // Mesmo fix do send/route.ts: nunca marcar como "sent" se o provider
