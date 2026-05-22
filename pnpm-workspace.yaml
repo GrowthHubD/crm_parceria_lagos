@@ -1,4 +1,6 @@
 allowBuilds:
+  '@ffmpeg-installer/ffmpeg': true
+  '@ffmpeg-installer/linux-x64': true
   '@whiskeysockets/baileys': true
   esbuild: true
   msw: true
@@ -7,6 +9,8 @@ allowBuilds:
   unrs-resolver: true
   workerd: true
 onlyBuiltDependencies:
+  - '@ffmpeg-installer/ffmpeg'
+  - '@ffmpeg-installer/linux-x64'
   - '@whiskeysockets/baileys'
   - esbuild
   - msw
