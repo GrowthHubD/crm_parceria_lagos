@@ -35,6 +35,7 @@ import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
 import { eq, and, asc } from "drizzle-orm";
 import { extractPhone } from "@/lib/uazapi";
 import { triggerFirstMessage, processPendingAutomations } from "@/lib/automations/runner";
+import { findExistingLeadByPhone, linkConversationToLead } from "@/lib/leads/match";
 import { uploadWhatsappMedia } from "@/lib/supabase-storage";
 
 interface UazapiV2Chat {
@@ -510,40 +511,51 @@ export async function POST(request: NextRequest) {
         .returning();
       conversationId = newConv.id;
 
-      // Auto-cria lead + dispara welcome (best-effort)
+      // Lead matching: ANTES de criar lead novo, procura por phone no tenant.
+      // Se acha → vincula a conversa nova ao lead antigo, NÃO dispara welcome
+      // (re-engajamento silencioso — decisão de produto pra não floodar
+      // contato existente com mensagem boas-vindas toda vez que ele volta).
+      // Se não acha → cria lead novo + welcome (comportamento legado).
       try {
-        const [firstStage] = await db
-          .select({ id: pipelineStage.id })
-          .from(pipelineStage)
-          .where(eq(pipelineStage.tenantId, wNum.tenantId))
-          .orderBy(asc(pipelineStage.order))
-          .limit(1);
+        const existing = await findExistingLeadByPhone(wNum.tenantId, contactPhone);
 
-        if (firstStage) {
-          const inserted = await db
-            .insert(lead)
-            .values({
-              tenantId: wNum.tenantId,
-              name: pushName ?? contactPhone,
-              phone: contactPhone,
-              pushName,
-              stageId: firstStage.id,
-              source: "inbound",
-              crmConversationId: conversationId,
-            })
-            .onConflictDoNothing()
-            .returning({ id: lead.id });
+        if (existing) {
+          await linkConversationToLead(existing.id, conversationId);
+          // NÃO chama triggerFirstMessage — contato já foi engajado antes.
+        } else {
+          const [firstStage] = await db
+            .select({ id: pipelineStage.id })
+            .from(pipelineStage)
+            .where(eq(pipelineStage.tenantId, wNum.tenantId))
+            .orderBy(asc(pipelineStage.order))
+            .limit(1);
 
-          if (inserted.length > 0) {
-            const newLead = inserted[0];
-            try {
-              await triggerFirstMessage({
+          if (firstStage) {
+            const inserted = await db
+              .insert(lead)
+              .values({
                 tenantId: wNum.tenantId,
-                leadId: newLead.id,
-              });
-              await processPendingAutomations(10);
-            } catch {
-              // best-effort
+                name: pushName ?? contactPhone,
+                phone: contactPhone,
+                pushName,
+                stageId: firstStage.id,
+                source: "inbound",
+                crmConversationId: conversationId,
+              })
+              .onConflictDoNothing()
+              .returning({ id: lead.id });
+
+            if (inserted.length > 0) {
+              const newLead = inserted[0];
+              try {
+                await triggerFirstMessage({
+                  tenantId: wNum.tenantId,
+                  leadId: newLead.id,
+                });
+                await processPendingAutomations(10);
+              } catch {
+                // best-effort
+              }
             }
           }
         }

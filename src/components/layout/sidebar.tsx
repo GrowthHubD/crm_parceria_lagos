@@ -22,6 +22,7 @@ import {
   Zap,
   CheckSquare,
   Building2,
+  BookUser,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiSound } from "@/hooks/use-ui-sound";
@@ -54,6 +55,7 @@ const CRM_MODULES: NavItem[] = [
   { title: "Dashboard", href: "/", icon: LayoutDashboard, module: "dashboard" },
   { title: "Pipeline", href: "/pipeline", icon: GitBranch, module: "pipeline" },
   { title: "CRM", href: "/crm", icon: MessageSquare, module: "crm" },
+  { title: "Contatos", href: "/contatos", icon: BookUser, module: "contatos" },
   { title: "Tarefas", href: "/tasks", icon: CheckSquare, module: "tasks" },
   { title: "Financeiro", href: "/financeiro", icon: DollarSign, module: "financial" },
   { title: "Agenda", href: "/agenda", icon: CalendarDays, module: "agenda" },

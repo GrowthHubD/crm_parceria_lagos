@@ -68,6 +68,11 @@ export const lead = pgTable(
   },
   (table) => [
     index("idx_lead_stage").on(table.stageId),
+    // Lookup por (tenant_id, phone) — usado pelo lead-matching no webhook
+    // Uazapi e na tela /contatos. Sem isso, todo INBOUND msg fazia scan completo
+    // da tabela lead. Migration manual: drizzle/0NNN_lead_phone_index.sql usa
+    // CREATE INDEX CONCURRENTLY pra não bloquear writes em prod.
+    index("idx_lead_tenant_phone").on(table.tenantId, table.phone),
   ]
 );
 

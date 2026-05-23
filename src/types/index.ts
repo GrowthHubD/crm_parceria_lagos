@@ -41,6 +41,7 @@ export type SystemModule =
   | "configuracoes"
   | "automations"       // CRM Lagos: sequências de follow-up
   | "tasks"             // CRM Lagos: tarefas vinculadas a lead
+  | "contatos"          // Lista geral de contatos (lead + conversa unificados)
   | "tenants"           // Superadmin: gestão de tenants
   | "partner_clients"   // partner_admin: lista + criação de clientes
   | "partner_metrics";  // partner_admin: métricas agregadas dos clientes
@@ -134,6 +135,7 @@ export const DEFAULT_PERMISSIONS: Record<
       "contracts",
       "financial",
       "crm",
+      "contatos",
       "clients",
       "sdr",
       "kanban",
@@ -155,6 +157,7 @@ export const DEFAULT_PERMISSIONS: Record<
       "pipeline",
       "contracts",
       "crm",
+      "contatos",
       "clients",
       "kanban",
       "agenda",
@@ -184,6 +187,7 @@ export const DEFAULT_PERMISSIONS: Record<
       "contracts",
       "financial",
       "crm",
+      "contatos",
       "clients",
       "sdr",
       "kanban",
@@ -205,6 +209,7 @@ export const DEFAULT_PERMISSIONS: Record<
       "dashboard",
       "pipeline",
       "crm",
+      "contatos",
       "financial",
       "clients",
       "kanban",
@@ -217,7 +222,7 @@ export const DEFAULT_PERMISSIONS: Record<
     canDelete: false,
   },
   operator: {
-    modules: ["dashboard", "pipeline", "crm", "kanban", "agenda", "tasks"],
+    modules: ["dashboard", "pipeline", "crm", "contatos", "kanban", "agenda", "tasks"],
     canEdit: true,
     canDelete: false,
   },
@@ -232,6 +237,7 @@ export const DEFAULT_PERMISSIONS: Record<
       "dashboard",
       "pipeline",
       "crm",
+      "contatos",
       "tasks",
       "agenda",
       "automations",
