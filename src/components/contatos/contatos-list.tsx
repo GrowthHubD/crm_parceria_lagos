@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { Search, BookUser, MessageSquare, Phone, Mail, Building2, ArrowUpRight } from "lucide-react";
+import { Search, BookUser, MessageSquare, Phone, Mail, Building2, ArrowUpRight, Loader2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
@@ -42,20 +42,43 @@ const CLASSIFICATION_LABEL: Record<string, { label: string; color: string }> = {
 };
 
 export function ContatosList({ initialContacts }: ContatosListProps) {
-  const [contacts] = useState<Contact[]>(initialContacts);
+  const [contacts, setContacts] = useState<Contact[]>(initialContacts);
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const filtered = useMemo(() => {
-    if (!search.trim()) return contacts;
-    const q = search.trim().toLowerCase();
-    return contacts.filter((c) => {
-      const haystack = [c.name, c.companyName, c.phone, c.email, c.contactPushName]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(q);
-    });
-  }, [contacts, search]);
+  // Server-side search: SSR só envia 50 mais recentes; busca por nome /
+  // phone / email vai pra API que faz ILIKE no Postgres (vê leads além dos
+  // 50 iniciais). Debounce de 300ms pra não disparar fetch em cada tecla.
+  useEffect(() => {
+    const q = search.trim();
+    // Não dispara fetch pra busca vazia — usa initialContacts.
+    if (q === "") {
+      setContacts(initialContacts);
+      setLoading(false);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/contatos?q=${encodeURIComponent(q)}&limit=100`, {
+          signal: ac.signal,
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { contacts: Contact[] };
+          setContacts(data.contacts);
+        }
+      } catch {
+        /* aborted ou erro de rede — silencioso */
+      } finally {
+        if (!ac.signal.aborted) setLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [search, initialContacts]);
 
   return (
     <div className="space-y-4">
@@ -67,7 +90,8 @@ export function ContatosList({ initialContacts }: ContatosListProps) {
             Contatos
           </h1>
           <p className="text-muted text-sm mt-1">
-            {filtered.length} de {contacts.length} contato{contacts.length !== 1 ? "s" : ""}
+            {contacts.length} contato{contacts.length !== 1 ? "s" : ""}
+            {search.trim() && " (filtrado)"}
           </p>
         </div>
       </div>
@@ -80,12 +104,15 @@ export function ContatosList({ initialContacts }: ContatosListProps) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Buscar por nome, empresa, telefone ou email…"
-          className="w-full bg-surface border border-border rounded-lg pl-9 pr-3 py-2.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-primary transition-colors"
+          className="w-full bg-surface border border-border rounded-lg pl-9 pr-9 py-2.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-primary transition-colors"
         />
+        {loading && (
+          <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted animate-spin pointer-events-none" />
+        )}
       </div>
 
       {/* Lista */}
-      {filtered.length === 0 ? (
+      {contacts.length === 0 ? (
         <div className="bg-surface rounded-xl border border-border p-12 text-center">
           <BookUser className="w-12 h-12 text-muted mx-auto mb-3 opacity-50" />
           <p className="text-foreground font-medium text-sm">Nenhum contato encontrado</p>
@@ -95,7 +122,7 @@ export function ContatosList({ initialContacts }: ContatosListProps) {
         </div>
       ) : (
         <div className="bg-surface rounded-xl border border-border overflow-hidden divide-y divide-border">
-          {filtered.map((c) => {
+          {contacts.map((c) => {
             const displayName = c.name || c.contactPushName || c.phone || "—";
             const initials = displayName
               .split(" ")

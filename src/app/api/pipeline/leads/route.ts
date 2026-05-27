@@ -6,6 +6,8 @@ import { getTenantId } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
 import { eq, and } from "drizzle-orm";
+import { normalizePhone } from "@/lib/phone";
+import { findExistingLeadByPhone } from "@/lib/leads/match";
 import type { UserRole } from "@/types";
 
 const createLeadSchema = z.object({
@@ -53,6 +55,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Etapa não encontrada" }, { status: 404 });
     }
 
+    // Dedup por phone: forma canônica (só dígitos) é a chave usada pelo
+    // webhook e pelo UNIQUE INDEX no banco. Aceita "(11) 99999-9999" do form
+    // mas armazena "11999999999". Se já existe um lead com esse phone no
+    // tenant, retorna 409 com o leadId existente pra UI poder abrir.
+    const normalizedPhone = normalizePhone(data.phone ?? "") || null;
+    if (normalizedPhone) {
+      const existing = await findExistingLeadByPhone(tenantId, normalizedPhone);
+      if (existing) {
+        return NextResponse.json(
+          {
+            error: "Já existe um lead com este telefone neste tenant.",
+            existingLeadId: existing.id,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     const [newLead] = await db
       .insert(lead)
       .values({
@@ -60,7 +80,7 @@ export async function POST(request: NextRequest) {
         name: data.name,
         companyName: data.companyName ?? null,
         email: data.email || null,
-        phone: data.phone ?? null,
+        phone: normalizedPhone,
         stageId: data.stageId,
         source: data.source ?? null,
         estimatedValue: data.estimatedValue != null ? String(data.estimatedValue) : null,

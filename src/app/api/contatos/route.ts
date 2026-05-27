@@ -10,7 +10,7 @@ import { handleApiError } from "@/lib/api-helpers";
 import { db } from "@/lib/db";
 import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
 import { crmConversation } from "@/lib/db/schema/crm";
-import { eq, and, desc, or, ilike, sql } from "drizzle-orm";
+import { eq, and, desc, or, ilike } from "drizzle-orm";
 import type { UserRole } from "@/types";
 
 export async function GET(request: NextRequest) {
@@ -66,10 +66,9 @@ export async function GET(request: NextRequest) {
       .limit(limit)
       .offset(offset);
 
-    const [{ total }] = await db
-      .select({ total: sql<number>`COUNT(*)::int` })
-      .from(lead)
-      .where(and(...whereConditions));
+    // COUNT(*) removido — UI não consome `total`. Evita aggregation full-scan
+    // por keystroke quando busca é debounced. Se virar necessário, adicionar
+    // de volta condicional ao searchParams.get("count") == "true".
 
     const contacts = rows.map((r) => ({
       ...r,
@@ -79,7 +78,7 @@ export async function GET(request: NextRequest) {
       lastMessageAt: r.lastMessageAt ? r.lastMessageAt.toISOString() : null,
     }));
 
-    return NextResponse.json({ contacts, total, limit, offset });
+    return NextResponse.json({ contacts, limit, offset });
   } catch (e) {
     return handleApiError(e, "CONTATOS GET");
   }

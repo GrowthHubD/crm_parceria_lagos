@@ -69,7 +69,7 @@ export default async function ContatosPage() {
     .leftJoin(crmConversation, eq(crmConversation.id, lead.crmConversationId))
     .where(eq(lead.tenantId, tenantCtx.tenantId))
     .orderBy(desc(lead.updatedAt))
-    .limit(100);
+    .limit(50);  // initial render — busca real vai pra /api/contatos com ILIKE
 
   const initialContacts = rows.map((r) => ({
     ...r,

@@ -12,6 +12,7 @@
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "../db";
 import { lead } from "../db/schema/pipeline";
+import { normalizePhone } from "../phone";
 
 export interface ExistingLead {
   id: string;
@@ -19,25 +20,28 @@ export interface ExistingLead {
 }
 
 /**
- * Procura o lead mais recente do tenant com o phone exato. Retorna null se
- * não houver. ORDER BY created_at DESC pra cobrir o caso (raro) de existirem
- * duplicatas legadas — pegamos o mais novo, que tende a ser o "atual".
+ * Procura o lead mais recente do tenant com o phone (em forma canônica).
+ * Normaliza o input pra que callers possam passar qualquer formato — o
+ * resultado independe de espaços/parênteses/traços.
+ *
+ * ORDER BY created_at DESC cobre duplicatas legadas — pegamos o mais novo.
  *
  * Performance: usa o índice `idx_lead_tenant_phone` (parcial em WHERE phone
- * IS NOT NULL). Custo O(log n) — seguro pra rodar em todo webhook incoming.
+ * IS NOT NULL). Custo O(log n) — seguro em todo webhook incoming.
  */
 export async function findExistingLeadByPhone(
   tenantId: string,
   phone: string
 ): Promise<ExistingLead | null> {
-  if (!phone) return null;
+  const normalized = normalizePhone(phone);
+  if (!normalized) return null;
   const [row] = await db
     .select({
       id: lead.id,
       crmConversationId: lead.crmConversationId,
     })
     .from(lead)
-    .where(and(eq(lead.tenantId, tenantId), eq(lead.phone, phone)))
+    .where(and(eq(lead.tenantId, tenantId), eq(lead.phone, normalized)))
     .orderBy(desc(lead.createdAt))
     .limit(1);
   return row ?? null;

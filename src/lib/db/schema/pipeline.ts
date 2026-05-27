@@ -7,9 +7,10 @@ import {
   integer,
   boolean,
   index,
+  uniqueIndex,
   primaryKey,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { user } from "./users";
 import { tenant } from "./tenants";
 
@@ -68,11 +69,17 @@ export const lead = pgTable(
   },
   (table) => [
     index("idx_lead_stage").on(table.stageId),
-    // Lookup por (tenant_id, phone) — usado pelo lead-matching no webhook
-    // Uazapi e na tela /contatos. Sem isso, todo INBOUND msg fazia scan completo
-    // da tabela lead. Migration manual: drizzle/0NNN_lead_phone_index.sql usa
-    // CREATE INDEX CONCURRENTLY pra não bloquear writes em prod.
-    index("idx_lead_tenant_phone").on(table.tenantId, table.phone),
+    // UNIQUE parcial (tenant_id, phone) WHERE phone IS NOT NULL AND phone != ''.
+    // Garante:
+    //   - findExistingLeadByPhone + INSERT é atômico (ON CONFLICT funciona)
+    //   - Sem race condition: 2 webhooks paralelos do mesmo phone NÃO criam
+    //     duplicatas (segundo bate em ON CONFLICT DO NOTHING)
+    //   - POST /api/pipeline/leads (criação manual) também protegido contra
+    //     duplicata cross-source (UI + webhook compartilham a mesma key).
+    // Aplicar em prod via scripts/apply-lead-phone-index.ts (dedup gate antes).
+    uniqueIndex("uq_lead_tenant_phone")
+      .on(table.tenantId, table.phone)
+      .where(sql`${table.phone} IS NOT NULL AND ${table.phone} <> ''`),
   ]
 );
 

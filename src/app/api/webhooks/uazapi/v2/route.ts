@@ -512,16 +512,30 @@ export async function POST(request: NextRequest) {
       conversationId = newConv.id;
 
       // Lead matching: ANTES de criar lead novo, procura por phone no tenant.
-      // Se acha → vincula a conversa nova ao lead antigo, NÃO dispara welcome
-      // (re-engajamento silencioso — decisão de produto pra não floodar
-      // contato existente com mensagem boas-vindas toda vez que ele volta).
-      // Se não acha → cria lead novo + welcome (comportamento legado).
+      //   - Lead já existe E já teve conversa → vincula nova conversa, NÃO
+      //     dispara welcome (re-engajamento silencioso, decisão de produto).
+      //   - Lead já existe MAS nunca teve conversa (criado manual via UI sem
+      //     WhatsApp prévio) → vincula + DISPARA welcome (primeira interação
+      //     real do contato com o tenant — comportamento esperado pelo
+      //     onboarding manual).
+      //   - Lead não existe → cria + welcome (caminho legado).
       try {
         const existing = await findExistingLeadByPhone(wNum.tenantId, contactPhone);
 
         if (existing) {
+          const wasNeverEngaged = existing.crmConversationId === null;
           await linkConversationToLead(existing.id, conversationId);
-          // NÃO chama triggerFirstMessage — contato já foi engajado antes.
+          if (wasNeverEngaged) {
+            try {
+              await triggerFirstMessage({
+                tenantId: wNum.tenantId,
+                leadId: existing.id,
+              });
+              await processPendingAutomations(10);
+            } catch {
+              // best-effort
+            }
+          }
         } else {
           const [firstStage] = await db
             .select({ id: pipelineStage.id })
