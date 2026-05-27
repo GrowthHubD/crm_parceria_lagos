@@ -58,6 +58,30 @@ const EMPTY: LeadFormData = {
   assignedTo: "",
 };
 
+/**
+ * Drizzle retorna `null` pra colunas nullable (companyName, email, phone, notes,
+ * source, assignedTo, estimatedValue). LeadFormData espera `string`. O spread
+ * `{ ...EMPTY, ...initialData }` substitui o "" do EMPTY pelo null do DB, e
+ * React renderiza `<input value={null}>` como vazio. Resultado: modal "Editar
+ * Lead" abria sem nenhum campo preenchido. Aqui forçamos coerce explícito.
+ */
+function sanitizeInitial(
+  d: (Partial<LeadFormData> & { id?: string }) | undefined
+): Partial<LeadFormData> {
+  if (!d) return {};
+  return {
+    name: d.name ?? "",
+    companyName: d.companyName ?? "",
+    email: d.email ?? "",
+    phone: d.phone ?? "",
+    stageId: d.stageId ?? "",
+    source: d.source ?? "",
+    estimatedValue: d.estimatedValue ?? "",
+    notes: d.notes ?? "",
+    assignedTo: d.assignedTo ?? "",
+  };
+}
+
 export function LeadModal({
   open,
   onClose,
@@ -68,7 +92,7 @@ export function LeadModal({
   initialData,
   mode = "create",
 }: LeadModalProps) {
-  const [form, setForm] = useState<LeadFormData>({ ...EMPTY, ...initialData });
+  const [form, setForm] = useState<LeadFormData>({ ...EMPTY, ...sanitizeInitial(initialData) });
   const [loading, setLoading] = useState(false);
 
   if (!open) return null;

@@ -102,7 +102,7 @@ export function LeadCard({ lead, onEdit, onDelete, onOpenConversation, canEdit, 
         {/* Content */}
         <div className="flex-1 min-w-0">
           {/* Name + company */}
-          <p className="text-sm font-semibold text-foreground leading-tight truncate">{lead.name}</p>
+          <p className="text-sm font-semibold text-foreground leading-tight truncate">{lead.name?.trim() || "Sem nome"}</p>
           {lead.companyName && (
             <p className="text-xs text-muted mt-0.5 truncate">{lead.companyName}</p>
           )}

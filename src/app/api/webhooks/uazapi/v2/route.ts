@@ -549,7 +549,12 @@ export async function POST(request: NextRequest) {
               .insert(lead)
               .values({
                 tenantId: wNum.tenantId,
-                name: pushName ?? contactPhone,
+                // ?? preservava STRING VAZIA quando Uazapi v2 manda
+                // wa_contactName="" — lead nascia com name vazio e cards do
+                // pipeline ficavam fantasmas (avatar "?", linha em branco).
+                // || trata "" como falsy; fallback final cobre cenário onde
+                // contactPhone também vier vazio (jid mal-formado).
+                name: (pushName?.trim() || contactPhone?.trim() || "Contato sem nome"),
                 phone: contactPhone,
                 pushName,
                 stageId: firstStage.id,
