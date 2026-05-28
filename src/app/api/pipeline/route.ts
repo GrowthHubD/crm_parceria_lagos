@@ -4,7 +4,7 @@ import { checkPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { pipeline, pipelineStage, lead, leadTag, leadTagAssignment } from "@/lib/db/schema/pipeline";
 import { crmConversation, crmMessage } from "@/lib/db/schema/crm";
-import { user } from "@/lib/db/schema/users";
+import { user, userTenant } from "@/lib/db/schema/users";
 import { eq, asc, desc, and } from "drizzle-orm";
 import { getTenantContext } from "@/lib/tenant";
 import { getNextFollowUpBatch } from "@/lib/automations/chain-preview";
@@ -65,6 +65,9 @@ export async function GET(request: NextRequest) {
         .from(lead)
         .leftJoin(user, eq(lead.assignedTo, user.id))
         .leftJoin(crmConversation, eq(lead.crmConversationId, crmConversation.id))
+        // CRÍTICO: escopo de tenant. Sem isso a query retornava leads de TODOS
+        // os tenants (vazamento cross-tenant ao trocar de funil no client).
+        .where(eq(lead.tenantId, ctx.tenantId))
         .orderBy(desc(lead.createdAt)),
       db
         .select({
@@ -74,8 +77,17 @@ export async function GET(request: NextRequest) {
           tagColor: leadTag.color,
         })
         .from(leadTagAssignment)
-        .innerJoin(leadTag, eq(leadTagAssignment.tagId, leadTag.id)),
-      db.select({ id: user.id, name: user.name }).from(user).where(eq(user.isActive, true)),
+        // Só assignments cuja tag pertence ao tenant atual.
+        .innerJoin(
+          leadTag,
+          and(eq(leadTagAssignment.tagId, leadTag.id), eq(leadTag.tenantId, ctx.tenantId))
+        ),
+      // Responsáveis: só usuários vinculados a ESTE tenant (via user_tenant).
+      db
+        .select({ id: user.id, name: user.name })
+        .from(user)
+        .innerJoin(userTenant, eq(userTenant.userId, user.id))
+        .where(and(eq(user.isActive, true), eq(userTenant.tenantId, ctx.tenantId))),
     ]);
 
     // Batch de próximos follow-ups (1 round-trip pra N leads)

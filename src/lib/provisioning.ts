@@ -15,6 +15,7 @@ import { tenant } from "./db/schema/tenants";
 import { user, userTenant } from "./db/schema/users";
 import { whatsappNumber } from "./db/schema/crm";
 import { pipeline, pipelineStage } from "./db/schema/pipeline";
+import { DEFAULT_STAGES } from "./pipeline/ensure-default";
 import { kanbanColumn } from "./db/schema/kanban";
 import { messageTemplate } from "./db/schema/settings";
 import { createInstance, instanceIdFromSlug } from "./whatsapp";
@@ -53,14 +54,6 @@ export interface ProvisionClientResult {
   magicLink?: string;
   warnings: string[];
 }
-
-const DEFAULT_STAGES = [
-  { name: "Novo", order: 0, color: "#6B7280", isWon: false },
-  { name: "Em contato", order: 1, color: "#3B82F6", isWon: false },
-  { name: "Negociação", order: 2, color: "#F59E0B", isWon: false },
-  { name: "Ganho", order: 3, color: "#10B981", isWon: true },
-  { name: "Perdido", order: 4, color: "#EF4444", isWon: false },
-];
 
 const DEFAULT_KANBAN_COLUMNS = [
   { name: "Backlog", order: 0, color: "#6B7280" },

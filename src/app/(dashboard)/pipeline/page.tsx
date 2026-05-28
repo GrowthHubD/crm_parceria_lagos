@@ -7,7 +7,7 @@ import { getTenantContext } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { pipeline, pipelineStage, lead, leadTag, leadTagAssignment } from "@/lib/db/schema/pipeline";
 import { crmConversation } from "@/lib/db/schema/crm";
-import { user } from "@/lib/db/schema/users";
+import { user, userTenant } from "@/lib/db/schema/users";
 import { eq, asc, desc, and } from "drizzle-orm";
 import { KanbanBoard } from "@/components/pipeline/kanban-board";
 import type { UserRole } from "@/types";
@@ -85,7 +85,8 @@ export default async function PipelinePage() {
     db
       .select({ id: user.id, name: user.name })
       .from(user)
-      .where(eq(user.isActive, true)),
+      .innerJoin(userTenant, eq(userTenant.userId, user.id))
+      .where(and(eq(user.isActive, true), eq(userTenant.tenantId, tenantCtx.tenantId))),
     db.select().from(leadTag).where(eq(leadTag.tenantId, tenantCtx.tenantId)).orderBy(asc(leadTag.name)),
   ]);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X, Loader2 } from "lucide-react";
 import { Select } from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
@@ -94,6 +94,16 @@ export function LeadModal({
 }: LeadModalProps) {
   const [form, setForm] = useState<LeadFormData>({ ...EMPTY, ...sanitizeInitial(initialData) });
   const [loading, setLoading] = useState(false);
+
+  // O modal fica SEMPRE montado no kanban-board (só alternado por `open`), então
+  // o inicializador do useState roda uma única vez. Sem este efeito, clicar em
+  // "editar" trocava o prop initialData mas o form mantinha o estado velho
+  // (vazio) — causa do "modal de editar abre sem os dados". Re-sincroniza ao
+  // abrir e quando muda o lead-alvo.
+  useEffect(() => {
+    if (open) setForm({ ...EMPTY, ...sanitizeInitial(initialData) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialData?.id]);
 
   if (!open) return null;
 

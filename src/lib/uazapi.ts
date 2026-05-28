@@ -40,10 +40,20 @@ async function req<T>(
   serverUrl?: string
 ): Promise<T> {
   const base = (serverUrl ?? BASE).replace(/\/$/, "");
-  const res = await fetch(`${base}${path}`, {
-    ...init,
-    headers: { ...authHeaders(token, useAdmin), ...(init?.headers ?? {}) },
-  });
+  // Timeout de 20s: sem isso, uma instância Uazapi lenta/travada pendura a
+  // request até o limite do runtime e o usuário fica esperando o spinner.
+  const ac = new AbortController();
+  const timeout = setTimeout(() => ac.abort(), 20000);
+  let res: Response;
+  try {
+    res = await fetch(`${base}${path}`, {
+      ...init,
+      signal: ac.signal,
+      headers: { ...authHeaders(token, useAdmin), ...(init?.headers ?? {}) },
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
   const text = await res.text();
   if (!res.ok) {
     throw new Error(`Uazapi API ${path}: HTTP ${res.status} — ${text.slice(0, 200)}`);

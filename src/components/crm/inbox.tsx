@@ -164,7 +164,7 @@ export function Inbox({
 
   // Search, number e tenant filter aplicados client-side sobre a lista já filtrada pelo server.
   const filtered = conversations.filter((c) => {
-    const name = c.contactName ?? c.contactPushName ?? c.contactPhone;
+    const name = c.contactName || c.contactPushName || c.contactPhone || "";
     const matchSearch = !search || name.toLowerCase().includes(search.toLowerCase()) || c.contactPhone.includes(search);
     const matchNumber = numberFilter === "all" || c.whatsappNumberId === numberFilter;
     const matchTenant = tenantFilter === "all" || c.tenantId === tenantFilter;
@@ -269,7 +269,10 @@ export function Inbox({
       ) : (
         <div className="bg-surface rounded-xl border border-border overflow-hidden divide-y divide-border">
           {filtered.map((c) => {
-            const name = c.contactAlias ?? c.contactName ?? c.contactPushName ?? c.contactPhone;
+            // || (não ??): contactPushName="" (Uazapi manda vazio) caía como
+            // nome válido e a linha ficava em branco com avatar "?". Cai no
+            // telefone quando não há nome.
+            const name = c.contactAlias || c.contactName || c.contactPushName || c.contactPhone || "Sem nome";
             const config = CLASSIFICATION_CONFIG[c.classification] ?? CLASSIFICATION_CONFIG.new;
             const initials = name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase();
 

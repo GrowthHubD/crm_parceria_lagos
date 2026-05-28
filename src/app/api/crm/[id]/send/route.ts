@@ -6,7 +6,7 @@ import { handleApiError } from "@/lib/api-helpers";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage, whatsappNumber } from "@/lib/db/schema/crm";
 import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
-import { eq, and, gt } from "drizzle-orm";
+import { eq, and, asc } from "drizzle-orm";
 import { sendText } from "@/lib/whatsapp";
 import type { UserRole } from "@/types";
 
@@ -152,7 +152,10 @@ export async function POST(
       .set({ lastMessageAt: new Date(), lastOutgoingAt: new Date(), updatedAt: new Date() })
       .where(eq(crmConversation.id, id));
 
-    // Avançar lead vinculado para a próxima etapa (best-effort)
+    // Avançar lead vinculado — SÓ uma vez: se ainda está na PRIMEIRA etapa do
+    // funil, move pra segunda (ex.: "Novo" → "Em contato") na primeira resposta.
+    // Depois disso, enviar mensagem NÃO mexe mais na etapa. Antes, cada mensagem
+    // empurrava o lead um estágio, podendo levá-lo até "Ganho" sem querer.
     try {
       const [linkedLead] = await db
         .select({ id: lead.id, stageId: lead.stageId })
@@ -168,23 +171,24 @@ export async function POST(
           .limit(1);
 
         if (currentStage) {
-          const [nextStage] = await db
-            .select({ id: pipelineStage.id })
+          // Duas primeiras etapas do funil, em ordem.
+          const firstTwo = await db
+            .select({ id: pipelineStage.id, order: pipelineStage.order })
             .from(pipelineStage)
             .where(
               and(
                 eq(pipelineStage.pipelineId, currentStage.pipelineId),
-                eq(pipelineStage.tenantId, ctx.tenantId),
-                gt(pipelineStage.order, currentStage.order)
+                eq(pipelineStage.tenantId, ctx.tenantId)
               )
             )
-            .orderBy(pipelineStage.order)
-            .limit(1);
+            .orderBy(asc(pipelineStage.order))
+            .limit(2);
 
-          if (nextStage) {
+          // Só avança se o lead está na primeira etapa e existe uma segunda.
+          if (firstTwo.length === 2 && firstTwo[0].order === currentStage.order) {
             await db
               .update(lead)
-              .set({ stageId: nextStage.id, enteredStageAt: new Date(), updatedAt: new Date() })
+              .set({ stageId: firstTwo[1].id, enteredStageAt: new Date(), updatedAt: new Date() })
               .where(eq(lead.id, linkedLead.id));
           }
         }

@@ -52,7 +52,8 @@ export async function GET(request: NextRequest) {
 
       db
         .select({ count: count() })
-        .from(lead),
+        .from(lead)
+        .where(eq(lead.tenantId, tenantId)),
 
       db
         .select()
@@ -110,7 +111,7 @@ export async function GET(request: NextRequest) {
     const [newLeadsThisMonth] = await db
       .select({ count: count() })
       .from(lead)
-      .where(gte(lead.createdAt, new Date(thisMonthStart)));
+      .where(and(eq(lead.tenantId, tenantId), gte(lead.createdAt, new Date(thisMonthStart))));
 
     return NextResponse.json({
       kpis: {

@@ -223,7 +223,9 @@ async function renderAmsDashboard(tenantId: string, userId: string, userRole: Us
       stageName: pipelineStage.name,
       stageOrder: pipelineStage.order,
       leadCount: count(lead.id),
-    }).from(pipelineStage).leftJoin(lead, eq(lead.stageId, pipelineStage.id))
+    }).from(pipelineStage)
+      .leftJoin(lead, and(eq(lead.stageId, pipelineStage.id), eq(lead.tenantId, tenantId)))
+      .where(eq(pipelineStage.tenantId, tenantId))
       .groupBy(pipelineStage.id, pipelineStage.name, pipelineStage.order)
       .orderBy(asc(pipelineStage.order)),
     db.select({ clientId: contract.clientId, mrr: contract.monthlyValue })

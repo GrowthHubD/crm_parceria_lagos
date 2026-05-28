@@ -31,11 +31,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { crmConversation, crmMessage, whatsappNumber } from "@/lib/db/schema/crm";
-import { lead, pipelineStage } from "@/lib/db/schema/pipeline";
-import { eq, and, asc } from "drizzle-orm";
+import { lead } from "@/lib/db/schema/pipeline";
+import { eq, and } from "drizzle-orm";
 import { extractPhone } from "@/lib/uazapi";
 import { triggerFirstMessage, processPendingAutomations } from "@/lib/automations/runner";
 import { findExistingLeadByPhone, linkConversationToLead } from "@/lib/leads/match";
+import { ensureDefaultPipeline } from "@/lib/pipeline/ensure-default";
 import { uploadWhatsappMedia } from "@/lib/supabase-storage";
 
 interface UazapiV2Chat {
@@ -428,7 +429,11 @@ export async function POST(request: NextRequest) {
     const contactPhone = extractPhone(contactJid);
     const mediaType = getMediaType(msg);
     const contentText = extractTextContent(msg, mediaType) ?? "";
-    const pushName = chat.wa_contactName ?? chat.name ?? null;
+    // || (não ??): Uazapi v2 manda wa_contactName="" pra não-contatos. Com ??
+    // o "" era preservado e o contato/lead nascia sem nome. Trim + fallback
+    // pra wa_name cobre os campos que a Uazapi popula de forma inconsistente.
+    const pushName =
+      chat.wa_contactName?.trim() || chat.name?.trim() || chat.wa_name?.trim() || null;
     const profilePic = chat.imagePreview ?? null;
 
     // ── DEBUG: loga payload sempre que for mídia, pra confirmar shape real
@@ -484,7 +489,9 @@ export async function POST(request: NextRequest) {
           lastMessageAt: now,
           lastIncomingAt: now,
           unreadCount: existing[0].unreadCount + 1,
-          contactPushName: pushName ?? existing[0].contactPushName,
+          // || preserva o nome bom quando a mensagem nova vem sem nome (não
+          // sobrescreve com "" / null).
+          contactPushName: pushName || existing[0].contactPushName,
           contactProfilePicUrl:
             profilePic && profilePic.startsWith("http")
               ? profilePic
@@ -537,44 +544,38 @@ export async function POST(request: NextRequest) {
             }
           }
         } else {
-          const [firstStage] = await db
-            .select({ id: pipelineStage.id })
-            .from(pipelineStage)
-            .where(eq(pipelineStage.tenantId, wNum.tenantId))
-            .orderBy(asc(pipelineStage.order))
-            .limit(1);
+          // Garante funil/etapa do tenant — TODA conversa nova vira lead, mesmo
+          // em tenant que nunca passou pelo onboarding. Antes, um `if (firstStage)`
+          // pulava silenciosamente a criação e o pipeline nascia vazio apesar de
+          // conversas ativas (causa raiz do "leads não salvam").
+          const { firstStageId } = await ensureDefaultPipeline(wNum.tenantId);
 
-          if (firstStage) {
-            const inserted = await db
-              .insert(lead)
-              .values({
+          const inserted = await db
+            .insert(lead)
+            .values({
+              tenantId: wNum.tenantId,
+              // || (não ??) trata "" como ausente; fallback final cobre jid
+              // mal-formado (contactPhone vazio).
+              name: pushName || contactPhone || "Contato sem nome",
+              phone: contactPhone,
+              pushName,
+              stageId: firstStageId,
+              source: "inbound",
+              crmConversationId: conversationId,
+            })
+            .onConflictDoNothing()
+            .returning({ id: lead.id });
+
+          if (inserted.length > 0) {
+            const newLead = inserted[0];
+            try {
+              await triggerFirstMessage({
                 tenantId: wNum.tenantId,
-                // ?? preservava STRING VAZIA quando Uazapi v2 manda
-                // wa_contactName="" — lead nascia com name vazio e cards do
-                // pipeline ficavam fantasmas (avatar "?", linha em branco).
-                // || trata "" como falsy; fallback final cobre cenário onde
-                // contactPhone também vier vazio (jid mal-formado).
-                name: (pushName?.trim() || contactPhone?.trim() || "Contato sem nome"),
-                phone: contactPhone,
-                pushName,
-                stageId: firstStage.id,
-                source: "inbound",
-                crmConversationId: conversationId,
-              })
-              .onConflictDoNothing()
-              .returning({ id: lead.id });
-
-            if (inserted.length > 0) {
-              const newLead = inserted[0];
-              try {
-                await triggerFirstMessage({
-                  tenantId: wNum.tenantId,
-                  leadId: newLead.id,
-                });
-                await processPendingAutomations(10);
-              } catch {
-                // best-effort
-              }
+                leadId: newLead.id,
+              });
+              await processPendingAutomations(10);
+            } catch {
+              // best-effort
             }
           }
         }

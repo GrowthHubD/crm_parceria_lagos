@@ -301,7 +301,12 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
       if (res.ok) {
         const data = await res.json();
         setConversation(data.conversation);
-        setMessages(data.messages);
+        // Preserva balões otimistas (status "sending") ainda não confirmados —
+        // sem isso, um poll no meio do envio faria a mensagem sumir e voltar.
+        setMessages((prev) => {
+          const pending = prev.filter((m) => m.id.startsWith("temp-"));
+          return pending.length ? [...data.messages, ...pending] : data.messages;
+        });
         if (data.linkedLead) setLinkedLead(data.linkedLead);
       }
     } catch { /* silent */ }
@@ -385,6 +390,28 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
     // Mantém o foco no textarea — em mobile, sem isso o teclado virtual fecha.
     requestAnimationFrame(() => textareaRef.current?.focus());
 
+    // Balão otimista do TEXTO: aparece na hora com status "sending" e é
+    // reconciliado com a resposta do servidor (ou removido se falhar). Dá
+    // feedback instantâneo em vez de esperar 1-3s o round-trip da Uazapi —
+    // principal causa do "delay" percebido no envio.
+    const tempId = hasText ? `temp-${Date.now()}-${Math.random().toString(36).slice(2)}` : null;
+    if (tempId) {
+      const optimistic: Message = {
+        id: tempId,
+        direction: "outgoing",
+        content: textToSend,
+        mediaType: "text",
+        mediaUrl: null,
+        status: "sending",
+        timestamp: new Date().toISOString(),
+        quotedMessageId: previousReply?.id ?? null,
+        quotedContent: previousReply?.content ?? null,
+        senderName: null,
+        isStarred: false,
+      };
+      setMessages((prev) => [...prev, optimistic]);
+    }
+
     // Timeout safeguard: se o fetch travar (cold-start, rede flaky, CORS bug
     // silencioso), aborta em 30s pra não deixar o spinner preso pra sempre.
     const ac = new AbortController();
@@ -395,14 +422,12 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
       const newMessages: Message[] = [];
 
       for (const f of filesToSend) {
-        console.log("[handleSend] sending media to", `/api/crm/${conversationId}/send-media`);
         const res = await fetch(`/api/crm/${conversationId}/send-media`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ file: f.dataUri, fileName: f.fileName, isImage: f.isImage }),
           signal: ac.signal,
         });
-        console.log("[handleSend] media response", res.status);
         if (res.ok) {
           const data = await res.json();
           newMessages.push(data.message);
@@ -413,17 +438,20 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
       }
 
       if (hasText) {
-        console.log("[handleSend] sending text to", `/api/crm/${conversationId}/send`);
         const res = await fetch(`/api/crm/${conversationId}/send`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: textToSend, quotedMessageId: previousReply?.id }),
           signal: ac.signal,
         });
-        console.log("[handleSend] text response", res.status);
         if (res.ok) {
           const data = await res.json();
-          newMessages.push(data.message);
+          // Substitui o balão otimista pela mensagem real (dedup por id caso o
+          // poll de 5s já a tenha trazido no meio do envio).
+          setMessages((prev) => {
+            const cleaned = prev.filter((m) => m.id !== tempId && m.id !== data.message.id);
+            return [...cleaned, data.message];
+          });
         } else {
           const data = await res.json().catch(() => ({}));
           textErr = data.error ?? res.statusText;
@@ -438,15 +466,16 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
         });
       }
 
-      // Erro só no texto → restaura o conteúdo do input pra ele reenviar
+      // Erro só no texto → remove o balão otimista e restaura o input pra reenviar
       if (textErr) {
+        if (tempId) setMessages((prev) => prev.filter((m) => m.id !== tempId));
         setInputText(textToSend);
         setReplyTo(previousReply);
         toast.error(`Falha ao enviar: ${textErr}`);
       }
     } catch (e) {
-      // Falha de rede / timeout / abort → restaura tudo
-      console.error("[handleSend] erro:", e);
+      // Falha de rede / timeout / abort → remove otimista + restaura tudo
+      if (tempId) setMessages((prev) => prev.filter((m) => m.id !== tempId));
       if (hasText) setInputText(textToSend);
       setStagedFiles(filesToSend);
       setReplyTo(previousReply);
@@ -588,7 +617,8 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
     });
   };
 
-  const name = conversation?.contactAlias ?? conversation?.contactName ?? conversation?.contactPushName ?? conversation?.contactPhone ?? "...";
+  // || (não ??): nome vazio ("") deve cair no telefone, não renderizar em branco.
+  const name = conversation?.contactAlias || conversation?.contactName || conversation?.contactPushName || conversation?.contactPhone || "...";
 
   const renderMessageContent = (msg: Message, isOutgoing: boolean) => {
     // Otimização: se mediaUrl já é URL pública (Supabase Storage), usa direto
@@ -598,6 +628,20 @@ export function ConversationView({ conversationId, canEdit, currentUserId, onBac
       msg.mediaUrl && msg.mediaUrl.startsWith("http")
         ? msg.mediaUrl
         : `/api/crm/${conversationId}/messages/${msg.id}/media`;
+
+    // Mídia sem URL persistida (download falhou no webhook) → rótulo em vez de
+    // emitir <audio>/<img>/<video> apontando pro proxy, que dá 404 e floodava o
+    // console com "Failed to load resource". (Documento é click-to-download,
+    // não auto-carrega, então não entra aqui.)
+    if (!msg.mediaUrl && msg.mediaType && ["audio", "image", "video", "sticker"].includes(msg.mediaType)) {
+      const labels: Record<string, string> = {
+        audio: "🎤 Áudio indisponível",
+        image: "📷 Imagem indisponível",
+        video: "🎥 Vídeo indisponível",
+        sticker: "🧩 Figurinha indisponível",
+      };
+      return <p className="italic opacity-70">{labels[msg.mediaType]}</p>;
+    }
 
     if (msg.mediaType === "audio") {
       return <AudioPlayer src={mediaSrc} isOutgoing={isOutgoing} />;
